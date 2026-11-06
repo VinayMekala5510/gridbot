@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { exchangeInfo } from "../../shared/exchanges";
 import type { AccountView, BotConfig, ExchangeId, Snapshot } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
-import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey } from "../exchanges/hyperliquid";
+import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
 import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
 import type { ExchangeAdapter } from "../exchanges/types";
@@ -23,6 +23,8 @@ export interface ManagerOptions {
   tickMs?: number;
   /** Override adapter creation (tests). */
   adapterFactory?: (config: BotConfig, account: AccountRecord | null) => ExchangeAdapter;
+  /** Override the exchange key check (tests). */
+  verifyKey?: (exchange: ExchangeId, address: string, privateKey: string) => Promise<unknown>;
 }
 
 /** Owns every bot instance, the saved accounts, and the master kill switch. */
@@ -61,18 +63,25 @@ export class BotManager {
     const info = exchangeInfo(input.exchange);
     let publicKey = input.publicKey.trim();
     let secret = input.secret.trim();
-    if (!input.name.trim()) throw new UserError("Account name is required");
-    if (!publicKey || !secret) throw new UserError(`${info.keyLabel} and ${info.secretLabel} are required`);
-    if (input.exchange.startsWith("hyperliquid")) {
-      try { publicKey = validateAddress(publicKey); secret = validatePrivateKey(secret); }
-      catch (err) { throw new UserError(message(err)); }
+    if (!publicKey || !secret) throw new UserError("Wallet address and private key are required");
+    if (!info.live) throw new UserError(`${info.label} accounts are not supported yet — only Hyperliquid can trade live`);
+    try {
+      publicKey = validateAddress(publicKey);
+      secret = validatePrivateKey(secret);
+      await (this.opts.verifyKey ?? verifyHyperliquidKey)(input.exchange, publicKey, secret);
+    } catch (err) {
+      throw new UserError(message(err));
     }
     const existing = await this.store.listAccounts();
-    if (existing.some(a => a.name.toLowerCase() === input.name.trim().toLowerCase())) {
+    if (existing.some(a => a.exchange === input.exchange && a.publicKey === publicKey)) {
+      throw new UserError(`This wallet is already saved for ${info.label}`);
+    }
+    const name = input.name.trim() || `${info.label} ${publicKey.slice(0, 6)}…${publicKey.slice(-4)}`;
+    if (existing.some(a => a.name.toLowerCase() === name.toLowerCase())) {
       throw new UserError("An account with this name already exists");
     }
     const rec = await this.store.createAccount({
-      name: input.name.trim(), exchange: input.exchange, publicKey,
+      name, exchange: input.exchange, publicKey,
       secretEnc: encryptSecret(secret), passphraseEnc: input.passphrase?.trim() ? encryptSecret(input.passphrase.trim()) : null,
     });
     return accountView(rec);

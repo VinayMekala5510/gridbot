@@ -5,6 +5,8 @@ import type { AccountView, ExchangeId } from "@/shared/types";
 import { api } from "../lib/client";
 import { Card, Field } from "./ui";
 
+const LIVE_EXCHANGES = EXCHANGES.filter(x => x.live);
+
 interface Props {
   accounts: AccountView[];
   activeAccountId: number | null;
@@ -12,13 +14,14 @@ interface Props {
   notify: (kind: "ok" | "error", text: string) => void;
 }
 
-const empty = { name: "", exchange: "hyperliquid" as ExchangeId, publicKey: "", secret: "", passphrase: "" };
+const empty = { name: "", exchange: "hyperliquid" as ExchangeId, publicKey: "", secret: "" };
 
 export function AccountSettings({ accounts, activeAccountId, onActiveAccount, notify }: Props) {
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
-  const info = exchangeInfo(form.exchange);
-  const hyperliquid = form.exchange.startsWith("hyperliquid");
+  const address = form.publicKey.trim();
+  const defaultName = /^0x[0-9a-fA-F]{40}$/u.test(address)
+    ? `${exchangeInfo(form.exchange).label} ${address.slice(0, 6)}…${address.slice(-4)}` : "";
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -26,7 +29,9 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
     e.preventDefault();
     setSaving(true);
     try {
-      const account = await api<AccountView>("/api/accounts", "POST", form);
+      const account = await api<AccountView>("/api/accounts", "POST", {
+        exchange: form.exchange, publicKey: address, secret: form.secret, name: form.name.trim() || defaultName,
+      });
       setForm(f => ({ ...empty, exchange: f.exchange }));
       onActiveAccount(account.id);
       notify("ok", `Account "${account.name}" saved and set as active.`);
@@ -53,28 +58,22 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
       <h1 className="page-title">Account Settings</h1>
       <div className="form-grid">
         <form onSubmit={save} autoComplete="off" className="contents">
-          <Card title="Exchange & Key" icon="⚿">
-            <Field label="Account name" info='A label to recognise this account, e.g. "Main Hyperliquid".'>
-              <input value={form.name} onChange={set("name")} placeholder="Main Hyperliquid account" maxLength={100} required />
-            </Field>
-            <Field label="Exchange / network" info="Live trading is available for Hyperliquid. Other exchanges run in Paper mode for now.">
+          <Card title="Add Account" icon="⚿">
+            <Field label="Network" info="Hyperliquid Testnet uses test funds; Hyperliquid is real money.">
               <select value={form.exchange} onChange={set("exchange")}>
-                {EXCHANGES.map(x => <option key={x.id} value={x.id}>{x.label.toUpperCase()}{x.live ? "" : " (paper only)"}</option>)}
+                {LIVE_EXCHANGES.map(x => <option key={x.id} value={x.id}>{x.label.toUpperCase()}</option>)}
               </select>
             </Field>
-          </Card>
-
-          <Card title="Credentials" icon="⚷">
-            <Field label={info.keyLabel} info={hyperliquid ? "Your main Hyperliquid wallet address (0x…). Public, read-only." : "The public API key for this exchange."}>
-              <input value={form.publicKey} onChange={set("publicKey")} placeholder={hyperliquid ? "0x…" : ""} spellCheck={false} required />
+            <Field label="Wallet address" info="Your Hyperliquid account address (0x…). This is the account that holds the funds.">
+              <input value={form.publicKey} onChange={set("publicKey")} placeholder="0x…" spellCheck={false} required />
             </Field>
-            <Field label={info.secretLabel} info={hyperliquid ? "Private key of an API wallet (Hyperliquid → More → API). Never your main wallet key." : "Secret used to sign orders."}>
-              <input type="password" value={form.secret} onChange={set("secret")} spellCheck={false} autoComplete="new-password" required />
+            <Field label="Private key" info="The key that signs orders: an API wallet key from Hyperliquid → More → API (recommended), or the wallet's own private key. It is checked against the wallet address when you save.">
+              <input type="password" value={form.secret} onChange={set("secret")} placeholder="0x…" spellCheck={false} autoComplete="new-password" required />
             </Field>
-            <Field label="Passphrase (optional)" info="Only for exchanges that require an extra API passphrase.">
-              <input type="password" value={form.passphrase} onChange={set("passphrase")} autoComplete="new-password" />
+            <Field label="Account name (optional)" info="A label for this account. Left empty, it is named after the network and address.">
+              <input value={form.name} onChange={set("name")} placeholder={defaultName || "e.g. Main account"} maxLength={100} />
             </Field>
-            <button className="btn primary" disabled={saving}>{saving ? "Saving…" : "Save account"}</button>
+            <button className="btn primary" disabled={saving}>{saving ? "Checking & saving…" : "Save account"}</button>
             <p className="hint">Keys are encrypted (AES-256-GCM) on the server and never sent back to the browser.</p>
           </Card>
         </form>

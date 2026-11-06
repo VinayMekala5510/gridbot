@@ -70,6 +70,29 @@ export function validateAddress(address: string): string {
   return trimmed.toLowerCase();
 }
 
+/**
+ * Checks that `privateKey` can trade for `address`: either it is the wallet's
+ * own key, or an API wallet that the wallet approved. Throws a readable error otherwise.
+ */
+export async function verifyHyperliquidKey(exchange: ExchangeId, address: string, privateKey: string): Promise<"wallet" | "api-wallet"> {
+  const owner = validateAddress(address);
+  const signer = new Wallet(validatePrivateKey(privateKey)).address.toLowerCase();
+  if (signer === owner) return "wallet";
+  const network = exchange === "hyperliquid" ? "Hyperliquid mainnet" : "Hyperliquid testnet";
+  let role: { role?: string; data?: { user?: string } };
+  try {
+    role = await post(hyperliquidUrl(exchange), "/info", { type: "userRole", user: signer }) as typeof role;
+  } catch (err) {
+    throw new Error(`Could not verify the key with Hyperliquid, try again: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (role.role === "agent") {
+    if (role.data?.user?.toLowerCase() === owner) return "api-wallet";
+    throw new Error(`This API wallet key belongs to a different account (${role.data?.user ?? "unknown"}), not ${owner}`);
+  }
+  throw new Error(`This private key (address ${signer}) is not the key of ${owner} and is not an approved API wallet for it on ${network}. ` +
+    "Create one in Hyperliquid → More → API, or check you picked the right network.");
+}
+
 interface HlFill { coin: string; px: string; sz: string; side: string; time: number; oid: number; tid: number; fee: string }
 
 /** One per saved account: signs actions, shares fill polling across that account's bots. */

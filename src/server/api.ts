@@ -10,7 +10,7 @@ const MAX_BODY = 32 * 1024;
 const decimal = z.string().trim().regex(/^\d+(\.\d+)?$/u, "must be a positive number").max(40);
 
 const accountSchema = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: z.string().trim().max(100).default(""),
   exchange: z.enum(EXCHANGE_IDS),
   publicKey: z.string().trim().min(1).max(255),
   secret: z.string().trim().min(1).max(500),
