@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [killing, setKilling] = useState(false);
+  const [user, setUser] = useState<string | null>(null);
   const toastId = useRef(0);
 
   const notify = useCallback((kind: Toast["kind"], text: string) => {
@@ -29,11 +30,21 @@ export default function Dashboard() {
       const saved = localStorage.getItem(ACTIVE_KEY);
       if (saved) setActiveAccountId(Number(saved));
     } catch { /* storage unavailable */ }
+    api<{ user: string | null }>("/api/me").then(r => setUser(r.user)).catch(() => undefined);
     const source = new EventSource("/api/stream");
     source.onmessage = e => { setSnap(JSON.parse(e.data) as Snapshot); setConnected(true); };
-    source.onerror = () => setConnected(false);
+    source.onerror = () => {
+      setConnected(false);
+      // Session expired → back to the login page.
+      fetch("/api/me").then(r => { if (r.status === 401) window.location.replace("/login"); }).catch(() => undefined);
+    };
     return () => source.close();
   }, []);
+
+  async function logout() {
+    await api("/api/logout", "POST").catch(() => undefined);
+    window.location.replace("/login");
+  }
 
   // Drop a stale active-account selection (e.g. account deleted elsewhere).
   useEffect(() => {
@@ -71,6 +82,8 @@ export default function Dashboard() {
         <div className="topbar-right">
           {snap?.storage === "memory" && <span className="chip warn">In-memory storage</span>}
           <span className={`conn ${connected ? "on" : "off"}`}><i />{connected ? "Live" : "Reconnecting…"}</span>
+          {user && <span className="user-chip">{user}</span>}
+          <button className="btn ghost small" onClick={logout}>Log out</button>
         </div>
       </header>
 

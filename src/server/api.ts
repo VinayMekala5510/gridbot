@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { EXCHANGE_IDS } from "../shared/exchanges";
+import { attemptLogin, clearSession, sessionUser } from "./auth";
 import { hasMasterKey } from "./crypto";
 import { BotManager, UserError } from "./engine/manager";
 import { message } from "./engine/grid";
@@ -82,6 +83,21 @@ export async function handleApi(manager: BotManager, req: IncomingMessage, res: 
       const timer = setInterval(push, 1000);
       req.on("close", () => clearInterval(timer));
       return true;
+    }
+
+    if (method === "POST" && path === "/api/login") {
+      const body = parse(z.object({ username: z.string().max(100), password: z.string().max(200) }), await readJson(req));
+      const result = attemptLogin(req, res, body.username, body.password);
+      return send(res, result.ok ? 200 : result.status, result.ok ? { ok: true } : { error: result.error }), true;
+    }
+
+    if (method === "POST" && path === "/api/logout") {
+      clearSession(req, res);
+      return send(res, 200, { ok: true }), true;
+    }
+
+    if (method === "GET" && path === "/api/me") {
+      return send(res, 200, { user: sessionUser(req) }), true;
     }
 
     if (method === "GET" && path === "/api/health") {
