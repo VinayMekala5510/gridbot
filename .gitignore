@@ -12,3 +12,4 @@ out/
 *.tsbuildinfo
 .env.*
 !.env.example
+.claude/
