@@ -2,11 +2,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
-import { Sidebar } from "./components/Sidebar";
+import { AccountSettings } from "./components/AccountSettings";
+import { BotParameters } from "./components/BotParameters";
 import { api, fmtPnl, pnlClass } from "./lib/client";
 
 type Toast = { id: number; kind: "ok" | "error"; text: string };
 type Filter = "all" | "active" | "stopped";
+type View = "dashboard" | "accounts" | "new-bot";
+const VIEWS: { id: View; label: string; icon: string }[] = [
+  { id: "dashboard", label: "Dashboard", icon: "▦" },
+  { id: "accounts", label: "Account Settings", icon: "⚿" },
+  { id: "new-bot", label: "Bot Parameters", icon: "＋" },
+];
 const ACTIVE_KEY = "gridbot.activeAccount";
 
 export default function Dashboard() {
@@ -17,7 +24,25 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<Filter>("all");
   const [killing, setKilling] = useState(false);
   const [user, setUser] = useState<string | null>(null);
+  const [view, setView] = useState<View>("dashboard");
   const toastId = useRef(0);
+
+  // The current page lives in the URL hash so refresh and back/forward keep it.
+  useEffect(() => {
+    const read = () => {
+      const h = window.location.hash.slice(1) as View;
+      setView(VIEWS.some(v => v.id === h) ? h : "dashboard");
+    };
+    read();
+    window.addEventListener("hashchange", read);
+    return () => window.removeEventListener("hashchange", read);
+  }, []);
+
+  function go(next: View) {
+    if (window.location.hash !== `#${next}`) window.location.hash = next;
+    setView(next);
+    window.scrollTo({ top: 0 });
+  }
 
   const notify = useCallback((kind: Toast["kind"], text: string) => {
     const id = ++toastId.current;
@@ -88,9 +113,25 @@ export default function Dashboard() {
       </header>
 
       <div className="shell">
-        <Sidebar accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} onActiveAccount={chooseAccount} notify={notify} />
+        <nav className="sidebar nav" aria-label="Main">
+          {VIEWS.map(v => (
+            <button key={v.id} className={`nav-item ${view === v.id ? "on" : ""}`} aria-current={view === v.id ? "page" : undefined} onClick={() => go(v.id)}>
+              <span className="nav-icon">{v.icon}</span>
+              <span className="nav-label">{v.label}</span>
+              {v.id === "dashboard" && snap && <span className="nav-count">{snap.totals.runningBots}</span>}
+              {v.id === "accounts" && snap && <span className="nav-count">{snap.accounts.length}</span>}
+            </button>
+          ))}
+        </nav>
 
         <main className="main">
+          {view === "accounts" && (
+            <AccountSettings accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} onActiveAccount={chooseAccount} notify={notify} />
+          )}
+          {view === "new-bot" && (
+            <BotParameters accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} notify={notify} onCreated={() => go("dashboard")} />
+          )}
+          {view === "dashboard" && <>
           <section className="overview">
             <div className="stat"><span>Total combined PnL</span><b className={`mono ${pnlClass(snap?.totals.netPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.netPnl) : "—"}</b><small>realized + unrealized − fees</small></div>
             <div className="stat"><span>Running bots</span><b className="mono">{snap ? snap.totals.runningBots : "—"}</b><small>of {snap?.totals.totalBots ?? 0} on dashboard</small></div>
@@ -102,7 +143,7 @@ export default function Dashboard() {
           </section>
 
           <div className="list-head">
-            <h2>Bot instances</h2>
+            <h2>Bot instances <button className="btn primary small" onClick={() => go("new-bot")}>＋ New bot</button></h2>
             <div className="seg" role="group" aria-label="Filter bots">
               {(["all", "active", "stopped"] as Filter[]).map(f => (
                 <button key={f} className={filter === f ? "on" : ""} aria-pressed={filter === f} onClick={() => setFilter(f)}>
@@ -116,12 +157,13 @@ export default function Dashboard() {
             : bots.length === 0 ? (
               <div className="placeholder">
                 {snap.bots.length === 0
-                  ? <>No bots yet. Configure one in <b>Bot parameters</b> and press <b>ADD BOT</b>. Start with Paper mode to test your settings.</>
+                  ? <>No bots yet. <button className="link-btn inline-link" onClick={() => go("new-bot")}>Create one in Bot Parameters</button>. Start with Paper mode to test your settings.</>
                   : "No bots match this filter."}
               </div>
             ) : (
               <div className="cards">{bots.map(b => <BotCard key={b.id} bot={b} now={snap.serverTime} notify={notify} />)}</div>
             )}
+          </>}
         </main>
       </div>
 
