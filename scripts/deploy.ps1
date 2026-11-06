@@ -30,4 +30,4 @@ if ($LASTEXITCODE -ne 0) { throw "git push failed" }
 Write-Host "-> Deploying on $target"
 ssh -i $key -o BatchMode=yes $target "cd ~/gridbot && git pull --ff-only -q origin main && bash scripts/server-deploy.sh"
 if ($LASTEXITCODE -ne 0) { throw "Server deploy failed" }
-Write-Host "Done. Open the dashboard through the tunnel: ssh -i `"$key`" -N -L 3000:127.0.0.1:3000 $target  then http://localhost:3000"
+Write-Host "Done. Dashboard: https://$($target.Split('@')[-1])"

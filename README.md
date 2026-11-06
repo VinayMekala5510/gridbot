@@ -48,7 +48,7 @@ Start on Hyperliquid Testnet.
   and never returned to the browser. Back up `MASTER_KEY`; without it saved accounts
   cannot be decrypted.
 - The server listens on `127.0.0.1` only and has no login. Open it through an SSH
-  tunnel (below). Add authentication and HTTPS before exposing it publicly.
+  login (set with `node scripts/set-login.mjs` on the server).
 
 ## Open the dashboard on the server
 
