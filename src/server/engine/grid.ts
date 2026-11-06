@@ -295,10 +295,20 @@ export class GridBot {
       return;
     }
     const price = await this.adapter.roundPrice(this.symbol, raw, side);
+    // Spot venues may take the fee out of the bought coin: close only what was received.
+    let qty = new D(entry.filledQty);
+    if (this.adapter.netEntryQty && entry.exchangeOrderId) {
+      try { qty = await this.adapter.netEntryQty(this.symbol, entry.exchangeOrderId, entry.side, qty); }
+      catch (err) { this.warn(`Could not read entry fees, using the full quantity: ${message(err)}`); }
+    }
+    if (qty.lte(0)) {
+      await this.halt("error", `Target quantity for L${entry.level} is zero after fees`);
+      return;
+    }
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (this.isStopped || this.isFrozen()) return;
       const ok = await this.placeOrder({
-        level: entry.level, side, role: "target", price, qty: new D(entry.filledQty),
+        level: entry.level, side, role: "target", price, qty,
         parentOrderId: entry.id, refPrice: entry.avgFillPrice ?? entry.price,
       });
       if (ok) return;

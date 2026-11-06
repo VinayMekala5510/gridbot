@@ -110,7 +110,9 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
               {form.mode === "live" && matching.map(a => <option key={a.id} value={a.id}>{a.name} · {a.publicKeyMasked}</option>)}
             </select>
           </Field>
-          {form.mode === "live" && <p className={liveProblem ? "hint warn" : "hint live"}>{liveProblem ?? "Real orders will be placed."}</p>}
+          {form.mode === "live" && <p className={liveProblem ? "hint warn" : "hint live"}>{liveProblem ?? (form.exchange === "binance"
+            ? "Real Spot orders. The account needs the coin for sells and the quote currency for buys; this is checked before the bot starts."
+            : "Real orders will be placed.")}</p>}
         </Card>
 
         <Card title="Trading" icon="〰">

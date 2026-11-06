@@ -19,7 +19,7 @@ export const EXCHANGES: ExchangeInfo[] = [
     keyLabel: "Wallet address",
     secretLabel: "Private key",
   },
-  { id: "binance", label: "Binance", live: false, accounts: true, symbolHint: "BTCUSDT", keyLabel: "API key", secretLabel: "API secret" },
+  { id: "binance", label: "Binance", live: true, accounts: true, symbolHint: "BTCUSDT", keyLabel: "API key", secretLabel: "API secret" },
   { id: "bybit", label: "Bybit", live: false, accounts: false, symbolHint: "BTCUSDT", keyLabel: "API key", secretLabel: "API secret" },
   { id: "deribit", label: "Deribit", live: false, accounts: false, symbolHint: "BTC-PERPETUAL", keyLabel: "Client ID", secretLabel: "Client secret" },
   { id: "solana", label: "Solana", live: false, accounts: false, symbolHint: "SOL", keyLabel: "Public key", secretLabel: "Private key" },

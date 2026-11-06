@@ -15,7 +15,7 @@ const HELP: Record<string, { key: string; secret: string; keyPlaceholder: string
     key: "Binance API key (Profile → API Management). Enable Spot trading, never withdrawals. If you restrict the key by IP, allow this server: 15.252.130.220.",
     secret: "Binance API secret (HMAC). It is checked with Binance when you save.",
     keyPlaceholder: "64-character API key",
-    note: "Binance keys are verified and stored. Binance bots run in Paper mode until live Binance trading is added.",
+    note: "Binance live bots trade Spot: hold the coin for the sell levels and the quote (e.g. USDT) for the buy levels.",
   },
   hyperliquid: {
     key: "Your Hyperliquid account address (0x…). This is the account that holds the funds.",

@@ -50,4 +50,16 @@ export interface ExchangeAdapter {
   lookupByClientId(symbol: string, clientId: string): Promise<string | null>;
   /** Fills for the given open orders that happened at or after `since` (ms). */
   fillsFor(symbol: string, open: TrackedOrder[], since: number): Promise<{ fills: ExchangeFill[]; cursor: number }>;
+  /**
+   * Quantity actually received from a filled entry, when the venue takes fees
+   * out of the bought asset (Binance spot). The target order uses this size.
+   */
+  netEntryQty?(symbol: string, exchangeOrderId: string, side: Side, filledQty: Decimal): Promise<Decimal>;
+  /** Throws when the account cannot fund the bot's first orders (spot balances). */
+  preflight?(symbol: string, need: { base: Decimal; quote: Decimal }): Promise<void>;
+}
+
+/** A saved exchange account that can blanket-cancel its open orders (master kill switch). */
+export interface AccountClient {
+  cancelAllOpen(): Promise<{ canceled: number; failed: number }>;
 }

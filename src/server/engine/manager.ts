@@ -3,10 +3,10 @@ import { exchangeInfo } from "../../shared/exchanges";
 import type { AccountView, BotConfig, ExchangeId, Snapshot } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
-import { validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
+import { BinanceAccount, BinanceAdapter, validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
 import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
-import type { ExchangeAdapter } from "../exchanges/types";
+import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
 import type { AccountRecord, BotRecord, Store } from "../store/types";
 import { GridBot, message } from "./grid";
 
@@ -32,6 +32,7 @@ export interface ManagerOptions {
 export class BotManager {
   private bots = new Map<number, GridBot>();
   private hlAccounts = new Map<number, HyperliquidAccount>();
+  private bnAccounts = new Map<number, BinanceAccount>();
   private frozen = false;
 
   constructor(private readonly store: Store, private readonly opts: ManagerOptions = {}) {}
@@ -99,6 +100,7 @@ export class BotManager {
     if (inUse) throw new UserError(`Stop bot "${inUse.rec.config.name}" before deleting its account`);
     await this.store.deleteAccount(id);
     this.hlAccounts.delete(id);
+    this.bnAccounts.delete(id);
   }
 
   private hyperliquid(account: AccountRecord): HyperliquidAccount {
@@ -110,6 +112,19 @@ export class BotManager {
     return client;
   }
 
+  private binance(account: AccountRecord): BinanceAccount {
+    let client = this.bnAccounts.get(account.id);
+    if (!client) {
+      client = new BinanceAccount(account.publicKey, decryptSecret(account.secretEnc));
+      this.bnAccounts.set(account.id, client);
+    }
+    return client;
+  }
+
+  private accountClient(account: AccountRecord): AccountClient {
+    return account.exchange === "binance" ? this.binance(account) : this.hyperliquid(account);
+  }
+
   // ── Bots ─────────────────────────────────────────────────────────────
 
   private adapterFor(config: BotConfig, account: AccountRecord | null): ExchangeAdapter {
@@ -119,6 +134,7 @@ export class BotManager {
     if (config.exchange === "hyperliquid" || config.exchange === "hyperliquid-testnet") {
       return new HyperliquidAdapter(this.hyperliquid(account));
     }
+    if (config.exchange === "binance") return new BinanceAdapter(this.binance(account));
     throw new UserError(`Live trading is not available for ${exchangeInfo(config.exchange).label} yet — use Paper mode`);
   }
 
@@ -176,6 +192,17 @@ export class BotManager {
       throw new UserError(message(err));
     }
 
+    // Spot venues: the account must hold the coins for the first sells and the quote for the first buys.
+    if (adapter.preflight) {
+      const stepQty = new Decimal(config.stepQty);
+      const maxEntries = new Decimal(config.mmQty).div(stepQty).floor().toNumber();
+      const first = [...levels].sort((a, b) => a.price.minus(price).abs().cmp(b.price.minus(price).abs())).slice(0, maxEntries);
+      const need = first.reduce((n, l) => (l.side === "sell"
+        ? { ...n, base: n.base.plus(stepQty) }
+        : { ...n, quote: n.quote.plus(l.price.times(stepQty)) }), { base: new Decimal(0), quote: new Decimal(0) });
+      try { await adapter.preflight(config.symbol, need); } catch (err) { throw new UserError(message(err)); }
+    }
+
     const rec = await this.store.createBot(config, "idle");
     const bot = new GridBot(rec, this.store, adapter, {
       tickMs: this.opts.tickMs, accountName: account?.name ?? null, isFrozen: () => this.frozen,
@@ -210,7 +237,7 @@ export class BotManager {
       for (const account of await this.store.listAccounts()) {
         if (!exchangeInfo(account.exchange).live) continue;
         try {
-          const res = await this.hyperliquid(account).cancelAllOpen();
+          const res = await this.accountClient(account).cancelAllOpen();
           accountCancels.push({ account: account.name, ...res });
         } catch (err) {
           accountCancels.push({ account: account.name, canceled: 0, failed: 0, error: message(err) });

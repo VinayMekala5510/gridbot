@@ -32,7 +32,7 @@ they are strictly inside the lower/upper limits.
 | Mode | What happens |
 |---|---|
 | Paper | Live public prices; a resting order fills at its limit when the market trades through it. No account needed. |
-| Live | Real orders. Implemented for **Hyperliquid perps** (mainnet and testnet). |
+| Live | Real orders. Implemented for **Hyperliquid perps** (mainnet and testnet) and **Binance Spot**. |
 
 Paper price feeds: Hyperliquid, Binance, Bybit, Deribit (Solana/Ethereum use Binance
 `<SYMBOL>USDT`). Live adapters for other venues can be added in
@@ -41,6 +41,11 @@ Paper price feeds: Hyperliquid, Binance, Bybit, Deribit (Solana/Ethereum use Bin
 Hyperliquid accounts: the public key is your **main wallet address**; the private key
 should be an **API wallet** key (Hyperliquid → More → API). Minimum order value is $10.
 Start on Hyperliquid Testnet.
+
+Binance accounts: API key + HMAC secret with Spot trading enabled (never withdrawals);
+if the key is IP-restricted, allow the server IP. Binance bots are Spot: the account must
+hold the coin for sell levels and the quote asset for buy levels (checked before start).
+When Binance takes the buy fee in the bought coin, the target sell uses the net quantity.
 
 ## Security
 
