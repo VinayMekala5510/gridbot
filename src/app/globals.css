@@ -234,6 +234,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .toast.ok { border-left: 3px solid var(--buy); }
 .toast.error { border-left: 3px solid var(--danger); }
 
+/* ── Instance kill switch ── */
+.kill-btn {
+  display: inline-flex; align-items: center; gap: 8px; flex: none;
+  height: 36px; padding: 0 14px 0 6px; border: 0; border-radius: 999px;
+  background: linear-gradient(135deg, #ff2e43, #c8102e); color: #fff;
+  font-weight: 700; font-size: 12px; letter-spacing: .06em;
+  box-shadow: 0 0 0 1px rgba(255, 46, 67, .5), 0 4px 14px rgba(255, 46, 67, .25);
+}
+.kill-btn:hover:not(:disabled) { filter: brightness(1.12); }
+.kill-btn-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(255, 255, 255, .2); font-size: 14px; }
+
 /* ── Login ── */
 .user-chip { font-size: 12px; color: var(--muted); padding: 3px 10px; border-radius: 999px; background: var(--panel-2); }
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 16px;

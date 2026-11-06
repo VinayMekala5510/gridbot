@@ -24,9 +24,9 @@ export function BotCard({ bot, now, notify }: { bot: BotView; now: number; notif
   const pct = Math.min(100, Math.max(0, used * 100));
 
   async function stop() {
-    if (!window.confirm(`Stop "${c.name}" and cancel all of its orders?`)) return;
+    if (!window.confirm(`KILL SWITCH — "${c.name}"\n\nStop this bot now and cancel all of its open orders${c.mode === "live" ? " on the exchange" : ""}? Other bots keep running. Positions already filled stay open.`)) return;
     setBusy(true);
-    try { await api(`/api/bots/${bot.id}/stop`, "POST"); notify("ok", `"${c.name}" stopped.`); }
+    try { await api(`/api/bots/${bot.id}/stop`, "POST"); notify("ok", `Kill switch: "${c.name}" stopped and its orders canceled.`); }
     catch (err) { notify("error", (err as Error).message); }
     finally { setBusy(false); }
   }
@@ -48,8 +48,10 @@ export function BotCard({ bot, now, notify }: { bot: BotView; now: number; notif
           </div>
         </div>
         {active
-          ? <button className="btn danger small" onClick={stop} disabled={busy}>■ Stop bot</button>
-          : <button className="btn ghost small" onClick={archive} disabled={busy}>Remove</button>}
+          ? <button className="kill-btn" onClick={stop} disabled={busy} title="Stop this bot and cancel all of its orders">
+              <span className="kill-btn-icon">⏻</span>{busy ? "STOPPING…" : "KILL SWITCH"}
+            </button>
+          : <button className="btn ghost small" onClick={archive} disabled={busy}>Remove from dashboard</button>}
       </header>
 
       <div className="status-row">

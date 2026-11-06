@@ -39,6 +39,17 @@ test("paper-only exchanges cannot store accounts", async () => {
   const manager = new BotManager(new MemoryStore(), { verifyKey: async () => "wallet" });
   const w = Wallet.createRandom();
   await assert.rejects(
-    manager.createAccount({ name: "b", exchange: "binance", publicKey: w.address, secret: w.privateKey }),
+    manager.createAccount({ name: "b", exchange: "bybit", publicKey: w.address, secret: w.privateKey }),
     /not supported yet/u);
+});
+
+test("Binance accounts take an API key and secret", async () => {
+  const store = new MemoryStore();
+  const manager = new BotManager(store, { verifyKey: async () => undefined });
+  const key = "A1".repeat(32), secret = "b2".repeat(32);
+  const view = await manager.createAccount({ name: "", exchange: "binance", publicKey: key, secret });
+  assert.equal(view.name, `Binance ${key.slice(0, 6)}…${key.slice(-4)}`);
+  await assert.rejects(
+    manager.createAccount({ name: "x", exchange: "binance", publicKey: "short", secret }),
+    /API key should be/u);
 });

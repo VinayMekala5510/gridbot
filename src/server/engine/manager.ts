@@ -3,6 +3,7 @@ import { exchangeInfo } from "../../shared/exchanges";
 import type { AccountView, BotConfig, ExchangeId, Snapshot } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
+import { validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
 import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
 import type { ExchangeAdapter } from "../exchanges/types";
@@ -64,11 +65,17 @@ export class BotManager {
     let publicKey = input.publicKey.trim();
     let secret = input.secret.trim();
     if (!publicKey || !secret) throw new UserError("Wallet address and private key are required");
-    if (!info.live) throw new UserError(`${info.label} accounts are not supported yet — only Hyperliquid can trade live`);
+    if (!info.accounts) throw new UserError(`${info.label} accounts are not supported yet`);
     try {
-      publicKey = validateAddress(publicKey);
-      secret = validatePrivateKey(secret);
-      await (this.opts.verifyKey ?? verifyHyperliquidKey)(input.exchange, publicKey, secret);
+      if (input.exchange === "binance") {
+        ({ apiKey: publicKey, secret } = validateBinanceKey(publicKey, secret));
+        if (this.opts.verifyKey) await this.opts.verifyKey(input.exchange, publicKey, secret);
+        else await verifyBinanceKey(publicKey, secret);
+      } else {
+        publicKey = validateAddress(publicKey);
+        secret = validatePrivateKey(secret);
+        await (this.opts.verifyKey ?? verifyHyperliquidKey)(input.exchange, publicKey, secret);
+      }
     } catch (err) {
       throw new UserError(message(err));
     }

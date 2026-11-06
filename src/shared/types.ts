@@ -29,6 +29,8 @@ export interface ExchangeInfo {
   label: string;
   /** Real order placement is implemented for this exchange. */
   live: boolean;
+  /** Accounts (keys) can be saved for this exchange. */
+  accounts: boolean;
   /** Placeholder shown in the symbol field. */
   symbolHint: string;
   keyLabel: string;

@@ -5,7 +5,24 @@ import type { AccountView, ExchangeId } from "@/shared/types";
 import { api } from "../lib/client";
 import { Card, Field } from "./ui";
 
-const LIVE_EXCHANGES = EXCHANGES.filter(x => x.live);
+// Networks offered for accounts, in this order.
+const ACCOUNT_NETWORKS = (["binance", "hyperliquid", "hyperliquid-testnet"] as ExchangeId[])
+  .map(id => EXCHANGES.find(x => x.id === id)!)
+  .filter(x => x.accounts);
+
+const HELP: Record<string, { key: string; secret: string; keyPlaceholder: string; note?: string }> = {
+  binance: {
+    key: "Binance API key (Profile → API Management). Enable Spot trading, never withdrawals. If you restrict the key by IP, allow this server: 15.252.130.220.",
+    secret: "Binance API secret (HMAC). It is checked with Binance when you save.",
+    keyPlaceholder: "64-character API key",
+    note: "Binance keys are verified and stored. Binance bots run in Paper mode until live Binance trading is added.",
+  },
+  hyperliquid: {
+    key: "Your Hyperliquid account address (0x…). This is the account that holds the funds.",
+    secret: "The key that signs orders: an API wallet key from Hyperliquid → More → API (recommended), or the wallet's own private key. It is checked against the wallet address when you save.",
+    keyPlaceholder: "0x…",
+  },
+};
 
 interface Props {
   accounts: AccountView[];
@@ -20,8 +37,10 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
   const address = form.publicKey.trim();
-  const defaultName = /^0x[0-9a-fA-F]{40}$/u.test(address)
-    ? `${exchangeInfo(form.exchange).label} ${address.slice(0, 6)}…${address.slice(-4)}` : "";
+  const info = exchangeInfo(form.exchange);
+  const help = HELP[form.exchange === "binance" ? "binance" : "hyperliquid"];
+  const defaultName = (form.exchange === "binance" ? address.length >= 10 : /^0x[0-9a-fA-F]{40}$/u.test(address))
+    ? `${info.label} ${address.slice(0, 6)}…${address.slice(-4)}` : "";
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -43,11 +62,11 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
   }
 
   async function remove(account: AccountView) {
-    if (!window.confirm(`Delete account "${account.name}"? Its encrypted keys are wiped from the server.`)) return;
+    if (!window.confirm(`Remove account "${account.name}"? Its encrypted keys are wiped from the server.`)) return;
     try {
       await api(`/api/accounts/${account.id}`, "DELETE");
       if (activeAccountId === account.id) onActiveAccount(null);
-      notify("ok", `Account "${account.name}" deleted.`);
+      notify("ok", `Account "${account.name}" removed.`);
     } catch (err) {
       notify("error", (err as Error).message);
     }
@@ -59,17 +78,18 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
       <div className="form-grid">
         <form onSubmit={save} autoComplete="off" className="contents">
           <Card title="Add Account" icon="⚿">
-            <Field label="Network" info="Hyperliquid Testnet uses test funds; Hyperliquid is real money.">
-              <select value={form.exchange} onChange={set("exchange")}>
-                {LIVE_EXCHANGES.map(x => <option key={x.id} value={x.id}>{x.label.toUpperCase()}</option>)}
+            <Field label="Network" info="Hyperliquid Testnet uses test funds; Hyperliquid and Binance are real money.">
+              <select value={form.exchange} onChange={e => setForm(f => ({ ...f, exchange: e.target.value as ExchangeId, publicKey: "", secret: "" }))}>
+                {ACCOUNT_NETWORKS.map(x => <option key={x.id} value={x.id}>{x.label.toUpperCase()}</option>)}
               </select>
             </Field>
-            <Field label="Wallet address" info="Your Hyperliquid account address (0x…). This is the account that holds the funds.">
-              <input value={form.publicKey} onChange={set("publicKey")} placeholder="0x…" spellCheck={false} required />
+            <Field label={info.keyLabel} info={help.key}>
+              <input value={form.publicKey} onChange={set("publicKey")} placeholder={help.keyPlaceholder} spellCheck={false} required />
             </Field>
-            <Field label="Private key" info="The key that signs orders: an API wallet key from Hyperliquid → More → API (recommended), or the wallet's own private key. It is checked against the wallet address when you save.">
-              <input type="password" value={form.secret} onChange={set("secret")} placeholder="0x…" spellCheck={false} autoComplete="new-password" required />
+            <Field label={info.secretLabel} info={help.secret}>
+              <input type="password" value={form.secret} onChange={set("secret")} spellCheck={false} autoComplete="new-password" required />
             </Field>
+            {help.note && <p className="hint warn">{help.note}</p>}
             <Field label="Account name (optional)" info="A label for this account. Left empty, it is named after the network and address.">
               <input value={form.name} onChange={set("name")} placeholder={defaultName || "e.g. Main account"} maxLength={100} />
             </Field>
@@ -93,7 +113,7 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
                     <strong>{a.name}{a.id === activeAccountId && <span className="badge paper">ACTIVE</span>}</strong>
                     <small>{exchangeInfo(a.exchange).label} · {a.publicKeyMasked}</small>
                   </div>
-                  <button type="button" className="icon-btn" aria-label={`Delete ${a.name}`} onClick={() => remove(a)}>✕</button>
+                  <button type="button" className="btn danger small" onClick={() => remove(a)}>✕ Remove</button>
                 </li>
               ))}
             </ul>
