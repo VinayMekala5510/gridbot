@@ -9,7 +9,7 @@ import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
 import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
 import type { AccountRecord, BotRecord, Store } from "../store/types";
-import { GridBot, message } from "./grid";
+import { GridBot, MAX_OPEN_PER_SIDE, message } from "./grid";
 
 export class UserError extends Error {}
 
@@ -215,7 +215,11 @@ export class BotManager {
     if (adapter.preflight) {
       const stepQty = new Decimal(config.stepQty);
       const maxEntries = new Decimal(config.mmQty).div(stepQty).floor().toNumber();
-      const first = [...levels].sort((a, b) => a.price.minus(price).abs().cmp(b.price.minus(price).abs())).slice(0, maxEntries);
+      const perSide = { buy: 0, sell: 0 };
+      const first = [...levels]
+        .sort((a, b) => a.price.minus(price).abs().cmp(b.price.minus(price).abs()))
+        .filter(l => (perSide[l.side] < MAX_OPEN_PER_SIDE ? (perSide[l.side]++, true) : false))
+        .slice(0, maxEntries);
       const need = first.reduce((n, l) => (l.side === "sell"
         ? { ...n, base: n.base.plus(stepQty) }
         : { ...n, quote: n.quote.plus(l.price.times(stepQty)) }), { base: new Decimal(0), quote: new Decimal(0) });

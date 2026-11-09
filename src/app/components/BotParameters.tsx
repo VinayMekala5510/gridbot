@@ -154,7 +154,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
           <Num label="Spread" info="Price distance from the entry price to each next grid level." value={form.spread} onChange={set("spread")} />
           <Num label="Target spread" info="Profit distance: a filled sell gets a buy target this much lower; a filled buy gets a sell target this much higher." value={form.targetSpread} onChange={set("targetSpread")} />
           <div className="row2">
-            <Field label="Steps" info="Maximum grid levels above and below the entry price.">
+            <Field label="Steps" info="Grid levels above and below the entry price. Only 3 buy and 3 sell orders rest at a time; when one fills, the next level is placed.">
               <input type="number" min={1} max={100} step={1} value={form.steps} onChange={set("steps")} required />
             </Field>
             <Num label="Per step qty" info={form.exchange.startsWith("deribit") ? "Order size at each level, in Deribit units: USD for BTC-PERPETUAL (multiples of 10) and ETH-PERPETUAL (multiples of 1); coins for *_USDC perps." : "Order size at each grid level."} value={form.stepQty} onChange={set("stepQty")} />
@@ -176,6 +176,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
             <div><dt>Grid range</dt><dd>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(steps)
               ? `${fmt(entry - steps * spread)} – ${fmt(entry + steps * spread)}` : "—"}</dd></div>
             <div><dt>Max entry fills</dt><dd>{Number.isFinite(maxEntries) ? maxEntries : "—"}</dd></div>
+            <div><dt>Open at once</dt><dd>{Number.isFinite(steps) ? `${Math.min(3, steps)} buy + ${Math.min(3, steps)} sell` : "—"}</dd></div>
             <div><dt>Mode</dt><dd className={form.mode === "live" ? "live-text" : ""}>{form.mode === "live" ? `LIVE · ${account?.name ?? "no account"}` : "Paper"}</dd></div>
           </dl>
           <button className={`btn primary big ${form.mode === "live" ? "live" : ""}`} disabled={busy}>

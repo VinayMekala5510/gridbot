@@ -8,10 +8,15 @@ const D = Decimal.clone({ precision: 40 });
 type Dec = Decimal;
 const ZERO = new D(0);
 
+/** Entry orders resting at once per side: 3 buys + 3 sells, so at most 6 per bot. */
+export const MAX_OPEN_PER_SIDE = 3;
+
 export interface GridBotOptions {
   tickMs?: number;
   /** Consecutive order-placement failures before the bot halts with an error. */
   maxPlaceErrors?: number;
+  /** Entry orders allowed to rest at once on each side (default MAX_OPEN_PER_SIDE). */
+  maxOpenPerSide?: number;
   accountName?: string | null;
   /** Returns true while the master kill switch is engaged. */
   isFrozen?: () => boolean;
@@ -53,6 +58,7 @@ export class GridBot {
   private lastPersistedPrice = 0;
   private readonly tickMs: number;
   private readonly maxPlaceErrors: number;
+  private readonly maxOpenPerSide: number;
   private readonly isFrozen: () => boolean;
   readonly accountName: string | null;
 
@@ -60,6 +66,7 @@ export class GridBot {
     this.rec = rec;
     this.tickMs = opts.tickMs ?? 2000;
     this.maxPlaceErrors = opts.maxPlaceErrors ?? 5;
+    this.maxOpenPerSide = opts.maxOpenPerSide ?? MAX_OPEN_PER_SIDE;
     this.isFrozen = opts.isFrozen ?? (() => false);
     this.accountName = opts.accountName ?? null;
   }
@@ -279,13 +286,19 @@ export class GridBot {
       .reduce((sum, o) => sum.plus(new D(o.qty).minus(o.filledQty)), ZERO);
     let budget = new D(this.rec.config.mmQty).minus(this.rec.entryFilledQty).minus(openEntryQty);
     const stepQty = await this.adapter.roundQty(this.symbol, new D(this.rec.config.stepQty));
+    // Only a window of levels rests at once: at most MAX_OPEN_PER_SIDE buy entries and as
+    // many sell entries. When one fills, the next free level on that side is placed.
+    const openPerSide = { buy: 0, sell: 0 };
+    for (const o of this.orders.values()) if (o.role === "entry") openPerSide[o.side]++;
     const candidates = this.levels
       .filter(l => !busy.has(l.k))
       .sort((a, b) => a.price.minus(price).abs().cmp(b.price.minus(price).abs()));
     for (const level of candidates) {
       if (budget.lt(stepQty) || this.isStopped || this.isFrozen()) break;
+      if (openPerSide[level.side] >= this.maxOpenPerSide) continue;
       const ok = await this.placeOrder({ level: level.k, side: level.side, role: "entry", price: level.price, qty: stepQty });
       if (!ok) break;
+      openPerSide[level.side]++;
       budget = budget.minus(stepQty);
     }
   }

@@ -127,3 +127,25 @@ test("state survives a restart", async () => {
   await resumed.tick();
   assert.equal(resumed.rec.roundtrips, 1, "target from before the restart completes");
 });
+
+test("only 3 buy and 3 sell entries rest at once, however many steps are configured", async () => {
+  const { bot, open } = await setup({ steps: 8, mmQty: "100", upperLimit: "120", lowerLimit: "80" });
+  await bot.tick();
+  const entries = open().filter(o => o.role === "entry");
+  assert.deepEqual(entries.filter(o => o.side === "buy").map(o => o.price).sort(), ["97", "98", "99"]);
+  assert.deepEqual(entries.filter(o => o.side === "sell").map(o => o.price).sort(), ["101", "102", "103"]);
+  assert.equal(entries.length, 6);
+});
+
+test("when an entry fills, the next level on that side is placed to keep 3 per side", async () => {
+  const { bot, open, setPrice } = await setup({ steps: 8, mmQty: "100", upperLimit: "120", lowerLimit: "80" });
+  await bot.tick();
+  setPrice(101.2);
+  await bot.tick(); // sell +1 fills → buy target at 100.5, sell +4 placed
+  const entries = open().filter(o => o.role === "entry");
+  assert.deepEqual(entries.filter(o => o.side === "sell").map(o => o.price).sort(), ["102", "103", "104"]);
+  assert.equal(entries.filter(o => o.side === "buy").length, 3);
+  assert.equal(open().filter(o => o.role === "target").length, 1);
+  await bot.tick(); // nothing else changes on a quiet tick
+  assert.equal(open().filter(o => o.role === "entry").length, 6);
+});

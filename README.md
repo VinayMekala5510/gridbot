@@ -15,7 +15,9 @@ they are strictly inside the lower/upper limits.
   target** is placed at `buy price + target spread`.
 - **Roundtrip:** counted when the target fills. Its PnL is
   `(exit − entry) × qty` (sign by direction); the level is then re-armed.
-- **Order style:** resting GTC limit orders, nearest levels to the market first.
+- **Order style:** resting GTC limit orders, nearest levels to the market first. Only
+  **3 buy and 3 sell entry orders** rest at a time (6 per bot); when one fills, the next
+  free level on that side is placed. Target orders are extra and not part of the 3 + 3.
 - **Volume cap (Market Making Quantity):** every filled entry quantity counts for the
   bot's lifetime (target fills do not reduce it). Open entry quantity is limited so
   `filled + open ≤ cap`, so the ceiling can never be exceeded. When less than one
