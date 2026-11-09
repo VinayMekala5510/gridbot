@@ -1,11 +1,25 @@
 export async function api<T = unknown>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: { "content-type": "application/json", "x-gridbot": "1" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { "content-type": "application/json", "x-gridbot": "1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new Error(`Could not reach the server (${(err as Error).message}). Check your connection or security software.`);
+  }
+  const text = await res.text();
+  let data: { error?: string } = {};
+  try { data = JSON.parse(text); } catch { /* not JSON: the reply came from something other than Gridbot */ }
+  if (!res.ok) {
+    if (data.error) throw new Error(data.error);
+    // No Gridbot error body means a proxy, firewall or security tool answered instead of the server.
+    const server = res.headers.get("server");
+    const snippet = text.replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ").trim().slice(0, 160);
+    throw new Error(`Request failed (${res.status})${server ? ` from "${server}"` : ""}${snippet ? `: ${snippet}` : " with an empty reply"}. ` +
+      "It did not come from the Gridbot server — a proxy, firewall, antivirus or browser extension may be blocking it.");
+  }
   return data as T;
 }
 
