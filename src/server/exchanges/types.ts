@@ -55,6 +55,11 @@ export interface ExchangeAdapter {
    * out of the bought asset (Binance spot). The target order uses this size.
    */
   netEntryQty?(symbol: string, exchangeOrderId: string, side: Side, filledQty: Decimal): Promise<Decimal>;
+  /**
+   * True for inverse contracts (Deribit BTC/ETH-PERPETUAL) where order quantity is in USD,
+   * so the engine converts quantity to coins (qty / price) when computing PnL.
+   */
+  isInverse?(symbol: string): Promise<boolean>;
   /** Throws when the account cannot fund the bot's first orders (spot balances). */
   preflight?(symbol: string, need: { base: Decimal; quote: Decimal }): Promise<void>;
 }

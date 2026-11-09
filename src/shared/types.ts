@@ -7,6 +7,7 @@ export type ExchangeId =
   | "binance"
   | "bybit"
   | "deribit"
+  | "deribit-testnet"
   | "solana"
   | "ethereum";
 

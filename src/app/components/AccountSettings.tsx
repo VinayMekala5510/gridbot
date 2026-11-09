@@ -6,7 +6,7 @@ import { api } from "../lib/client";
 import { Card, Field } from "./ui";
 
 // Networks offered for accounts, in this order.
-const ACCOUNT_NETWORKS = (["binance", "hyperliquid", "hyperliquid-testnet"] as ExchangeId[])
+const ACCOUNT_NETWORKS = (["binance", "hyperliquid", "hyperliquid-testnet", "deribit", "deribit-testnet"] as ExchangeId[])
   .map(id => EXCHANGES.find(x => x.id === id)!)
   .filter(x => x.accounts);
 
@@ -16,6 +16,12 @@ const HELP: Record<string, { key: string; secret: string; keyPlaceholder: string
     secret: "Binance API secret (HMAC). It is checked with Binance when you save.",
     keyPlaceholder: "64-character API key",
     note: "Binance live bots trade Spot: hold the coin for the sell levels and the quote (e.g. USDT) for the buy levels.",
+  },
+  deribit: {
+    key: "Client ID of a Deribit API key (Account → API). Give it Trade: Read + Write; never Wallet withdrawals.",
+    secret: "Client secret of that API key. It is checked with Deribit when you save.",
+    keyPlaceholder: "Client ID",
+    note: "Deribit keys only work on the network they were made on: Deribit Testnet keys come from test.deribit.com.",
   },
   hyperliquid: {
     key: "Your Hyperliquid account address (0x…). This is the account that holds the funds.",
@@ -38,8 +44,8 @@ export function AccountSettings({ accounts, activeAccountId, onActiveAccount, no
   const [saving, setSaving] = useState(false);
   const address = form.publicKey.trim();
   const info = exchangeInfo(form.exchange);
-  const help = HELP[form.exchange === "binance" ? "binance" : "hyperliquid"];
-  const defaultName = (form.exchange === "binance" ? address.length >= 10 : /^0x[0-9a-fA-F]{40}$/u.test(address))
+  const help = HELP[form.exchange === "binance" ? "binance" : form.exchange.startsWith("deribit") ? "deribit" : "hyperliquid"];
+  const defaultName = (form.exchange.startsWith("hyperliquid") ? /^0x[0-9a-fA-F]{40}$/u.test(address) : address.length >= 6)
     ? `${info.label} ${address.slice(0, 6)}…${address.slice(-4)}` : "";
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [key]: e.target.value }));

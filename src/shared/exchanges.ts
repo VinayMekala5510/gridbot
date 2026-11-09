@@ -21,7 +21,8 @@ export const EXCHANGES: ExchangeInfo[] = [
   },
   { id: "binance", label: "Binance", live: true, accounts: true, symbolHint: "BTCUSDT", keyLabel: "API key", secretLabel: "API secret" },
   { id: "bybit", label: "Bybit", live: false, accounts: false, symbolHint: "BTCUSDT", keyLabel: "API key", secretLabel: "API secret" },
-  { id: "deribit", label: "Deribit", live: false, accounts: false, symbolHint: "BTC-PERPETUAL", keyLabel: "Client ID", secretLabel: "Client secret" },
+  { id: "deribit", label: "Deribit", live: true, accounts: true, symbolHint: "BTC-PERPETUAL or SOL_USDC", keyLabel: "Client ID", secretLabel: "Client secret" },
+  { id: "deribit-testnet", label: "Deribit Testnet", live: true, accounts: true, symbolHint: "BTC-PERPETUAL or SOL_USDC", keyLabel: "Client ID", secretLabel: "Client secret" },
   { id: "solana", label: "Solana", live: false, accounts: false, symbolHint: "SOL", keyLabel: "Public key", secretLabel: "Private key" },
   { id: "ethereum", label: "Ethereum", live: false, accounts: false, symbolHint: "ETH", keyLabel: "Public address", secretLabel: "Private key" },
 ];

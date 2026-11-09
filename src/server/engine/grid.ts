@@ -42,6 +42,8 @@ export class GridBot {
   private events: EventView[] = [];
   private summary = { buy: { count: 0, qty: ZERO, notional: ZERO }, sell: { count: 0, qty: ZERO, notional: ZERO } };
   private levels: Level[] = [];
+  /** Inverse contracts: quantity is in USD, so PnL uses qty / entry price as the coin amount. */
+  private inverse = false;
   private chain: Promise<unknown> = Promise.resolve();
   private timer: NodeJS.Timeout | null = null;
   private stopRequested = false;
@@ -88,6 +90,7 @@ export class GridBot {
   /** Loads levels and persisted state. Call once before start(). */
   async load(): Promise<void> {
     this.levels = await GridBot.computeLevels(this.rec, this.adapter);
+    this.inverse = this.adapter.isInverse ? await this.adapter.isInverse(this.symbol) : false;
     const open = await this.store.listOrders(this.id, ["pending", "open"]);
     for (const o of open) this.orders.set(o.id, o);
     for (const t of await this.store.fillTradeIds(this.id, open.map(o => o.id))) this.seenTrades.add(t);
@@ -250,7 +253,8 @@ export class GridBot {
     const exitPrice = new D(target.avgFillPrice ?? target.price);
     const qty = new D(target.filledQty);
     const entrySide: Side = target.side === "sell" ? "buy" : "sell";
-    const pnl = entrySide === "buy" ? exitPrice.minus(entryPrice).times(qty) : entryPrice.minus(exitPrice).times(qty);
+    const coins = this.inverse ? qty.div(entryPrice) : qty;
+    const pnl = entrySide === "buy" ? exitPrice.minus(entryPrice).times(coins) : entryPrice.minus(exitPrice).times(coins);
     this.rec.roundtrips++;
     this.rec.realizedPnl = new D(this.rec.realizedPnl).plus(pnl).toFixed();
     await this.store.insertRoundtrip({
@@ -431,8 +435,9 @@ export class GridBot {
     let unrealized = ZERO;
     if (price) {
       for (const t of targets) {
-        const qty = new D(t.qty).minus(t.filledQty);
+        const contracts = new D(t.qty).minus(t.filledQty);
         const ref = new D(t.refPrice ?? t.price);
+        const qty = this.inverse ? contracts.div(ref) : contracts;
         unrealized = unrealized.plus(t.side === "sell" ? price.minus(ref).times(qty) : ref.minus(price).times(qty));
       }
     }

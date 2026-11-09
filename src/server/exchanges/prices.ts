@@ -36,10 +36,16 @@ function spotPair(symbol: string): string {
   return /(USDT|USDC|BUSD|FDUSD|BTC|ETH)$/u.test(s) && s.length > 4 ? s : `${s}USDT`;
 }
 
-function deribitInstrument(symbol: string): string {
-  const s = symbol.trim().toUpperCase();
+export function deribitUrl(exchange: ExchangeId): string {
+  return exchange === "deribit-testnet" ? "https://test.deribit.com/api/v2" : "https://www.deribit.com/api/v2";
+}
+
+/** "btc" → BTC-PERPETUAL, "SOL_USDC" → SOL_USDC-PERPETUAL, "ETH-PERP" → ETH-PERPETUAL; full names pass through. */
+export function deribitInstrument(symbol: string): string {
+  const s = symbol.trim().toUpperCase().replace(/\//gu, "_");
   if (s.includes("-")) return s.replace(/-PERP$/u, "-PERPETUAL");
-  return `${s.replace(/(USDT|USDC|USD)$/u, "")}-PERPETUAL`;
+  if (s.includes("_")) return `${s}-PERPETUAL`;
+  return `${s.replace(/(USDT|USD)$/u, "")}-PERPETUAL`;
 }
 
 function positive(raw: unknown, what: string): Decimal {
@@ -75,11 +81,16 @@ export async function fetchPrice(exchange: ExchangeId, symbol: string): Promise<
         { result?: { list?: { lastPrice?: string }[] } };
       return positive(data.result?.list?.[0]?.lastPrice, pair);
     }
-    case "deribit": {
+    case "deribit":
+    case "deribit-testnet": {
       const instrument = deribitInstrument(symbol);
-      const data = await cached(`deribit:${instrument}`, () =>
-        fetchJson(`https://www.deribit.com/api/v2/public/ticker?instrument_name=${encodeURIComponent(instrument)}`)) as
-        { result?: { last_price?: number } };
+      const base = deribitUrl(exchange);
+      const data = await cached(`deribit:${base}:${instrument}`, async () => {
+        const res = await fetch(`${base}/public/ticker?instrument_name=${encodeURIComponent(instrument)}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+        const body = await res.json().catch(() => ({})) as { result?: { last_price?: number }; error?: { message?: string } };
+        if (body.error) throw new Error(`${instrument} on ${exchange === "deribit" ? "Deribit" : "Deribit Testnet"}: ${body.error.message ?? "not found"}`);
+        return body;
+      });
       return positive(data.result?.last_price, instrument);
     }
   }

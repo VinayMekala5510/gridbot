@@ -4,6 +4,7 @@ import type { AccountView, BotConfig, ExchangeId, Snapshot } from "../../shared/
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
 import { BinanceAccount, BinanceAdapter, validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
+import { DeribitAccount, DeribitAdapter, verifyDeribitKey } from "../exchanges/deribit";
 import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
 import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
@@ -33,6 +34,7 @@ export class BotManager {
   private bots = new Map<number, GridBot>();
   private hlAccounts = new Map<number, HyperliquidAccount>();
   private bnAccounts = new Map<number, BinanceAccount>();
+  private dbAccounts = new Map<number, DeribitAccount>();
   private frozen = false;
 
   constructor(private readonly store: Store, private readonly opts: ManagerOptions = {}) {}
@@ -65,10 +67,14 @@ export class BotManager {
     const info = exchangeInfo(input.exchange);
     let publicKey = input.publicKey.trim();
     let secret = input.secret.trim();
-    if (!publicKey || !secret) throw new UserError("Wallet address and private key are required");
+    if (!publicKey || !secret) throw new UserError(`${info.keyLabel} and ${info.secretLabel} are required`);
     if (!info.accounts) throw new UserError(`${info.label} accounts are not supported yet`);
     try {
-      if (input.exchange === "binance") {
+      if (isDeribit(input.exchange)) {
+        if (!/^[A-Za-z0-9_-]{4,64}$/u.test(publicKey)) throw new Error("Deribit Client ID looks wrong (letters, digits, - and _ only)");
+        if (!/^[A-Za-z0-9_-]{8,128}$/u.test(secret)) throw new Error("Deribit Client secret looks wrong (letters, digits, - and _ only)");
+        await (this.opts.verifyKey ?? verifyDeribitKey)(input.exchange, publicKey, secret);
+      } else if (input.exchange === "binance") {
         ({ apiKey: publicKey, secret } = validateBinanceKey(publicKey, secret));
         if (this.opts.verifyKey) await this.opts.verifyKey(input.exchange, publicKey, secret);
         else await verifyBinanceKey(publicKey, secret);
@@ -82,7 +88,7 @@ export class BotManager {
     }
     const existing = await this.store.listAccounts();
     if (existing.some(a => a.exchange === input.exchange && a.publicKey === publicKey)) {
-      throw new UserError(`This wallet is already saved for ${info.label}`);
+      throw new UserError(`This ${info.keyLabel.toLowerCase()} is already saved for ${info.label}`);
     }
     const name = input.name.trim() || `${info.label} ${publicKey.slice(0, 6)}…${publicKey.slice(-4)}`;
     if (existing.some(a => a.name.toLowerCase() === name.toLowerCase())) {
@@ -101,6 +107,7 @@ export class BotManager {
     await this.store.deleteAccount(id);
     this.hlAccounts.delete(id);
     this.bnAccounts.delete(id);
+    this.dbAccounts.delete(id);
   }
 
   private hyperliquid(account: AccountRecord): HyperliquidAccount {
@@ -121,8 +128,19 @@ export class BotManager {
     return client;
   }
 
+  private deribit(account: AccountRecord): DeribitAccount {
+    let client = this.dbAccounts.get(account.id);
+    if (!client) {
+      client = new DeribitAccount(account.exchange, account.publicKey, decryptSecret(account.secretEnc));
+      this.dbAccounts.set(account.id, client);
+    }
+    return client;
+  }
+
   private accountClient(account: AccountRecord): AccountClient {
-    return account.exchange === "binance" ? this.binance(account) : this.hyperliquid(account);
+    if (account.exchange === "binance") return this.binance(account);
+    if (isDeribit(account.exchange)) return this.deribit(account);
+    return this.hyperliquid(account);
   }
 
   // ── Bots ─────────────────────────────────────────────────────────────
@@ -135,6 +153,7 @@ export class BotManager {
       return new HyperliquidAdapter(this.hyperliquid(account));
     }
     if (config.exchange === "binance") return new BinanceAdapter(this.binance(account));
+    if (isDeribit(config.exchange)) return new DeribitAdapter(this.deribit(account));
     throw new UserError(`Live trading is not available for ${exchangeInfo(config.exchange).label} yet — use Paper mode`);
   }
 
@@ -267,6 +286,10 @@ export class BotManager {
       bots, accounts,
     };
   }
+}
+
+function isDeribit(exchange: ExchangeId): boolean {
+  return exchange === "deribit" || exchange === "deribit-testnet";
 }
 
 function accountView(a: AccountRecord): AccountView {

@@ -128,7 +128,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
             <Field label="Steps" info="Maximum grid levels above and below the entry price.">
               <input type="number" min={1} max={100} step={1} value={form.steps} onChange={set("steps")} required />
             </Field>
-            <Num label="Per step qty" info="Order size at each grid level." value={form.stepQty} onChange={set("stepQty")} />
+            <Num label="Per step qty" info={form.exchange.startsWith("deribit") ? "Order size at each level, in Deribit units: USD for BTC-PERPETUAL (multiples of 10) and ETH-PERPETUAL (multiples of 1); coins for *_USDC perps." : "Order size at each grid level."} value={form.stepQty} onChange={set("stepQty")} />
           </div>
         </Card>
 

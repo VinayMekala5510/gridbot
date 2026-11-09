@@ -32,7 +32,7 @@ they are strictly inside the lower/upper limits.
 | Mode | What happens |
 |---|---|
 | Paper | Live public prices; a resting order fills at its limit when the market trades through it. No account needed. |
-| Live | Real orders. Implemented for **Hyperliquid perps** (mainnet and testnet) and **Binance Spot**. |
+| Live | Real orders. Implemented for **Hyperliquid perps** and **Deribit perps** (mainnet and testnet each) and **Binance Spot**. |
 
 Paper price feeds: Hyperliquid, Binance, Bybit, Deribit (Solana/Ethereum use Binance
 `<SYMBOL>USDT`). Live adapters for other venues can be added in
@@ -46,6 +46,12 @@ Binance accounts: API key + HMAC secret with Spot trading enabled (never withdra
 if the key is IP-restricted, allow the server IP. Binance bots are Spot: the account must
 hold the coin for sell levels and the quote asset for buy levels (checked before start).
 When Binance takes the buy fee in the bought coin, the target sell uses the net quantity.
+
+Deribit accounts: Client ID + Client secret of an API key with Trade read/write. Testnet
+keys come from test.deribit.com. Quantities use Deribit units: USD for inverse perps
+(BTC-PERPETUAL in multiples of 10, ETH-PERPETUAL in multiples of 1), coins for
+`*_USDC` linear perps. PnL for inverse perps converts the USD amount to coins at the
+entry price, so it is reported in USD.
 
 ## Security
 
