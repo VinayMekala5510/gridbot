@@ -4,6 +4,7 @@ import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
 import { AccountSettings } from "./components/AccountSettings";
 import { BotParameters } from "./components/BotParameters";
+import { Logo } from "./components/Logo";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { api, fmtPnl, pnlClass } from "./lib/client";
 
@@ -104,7 +105,7 @@ export default function Dashboard() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand"><span className="logo">▦</span>gridbot<span className="dot">.</span></div>
+        <div className="brand"><Logo />gridbot<span className="dot">.</span></div>
         <div className="topbar-right">
           {snap?.storage === "memory" && <span className="chip warn">In-memory storage</span>}
           <span className={`conn ${connected ? "on" : "off"}`}><i />{connected ? "Live" : "Reconnecting…"}</span>

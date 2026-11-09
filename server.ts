@@ -40,7 +40,7 @@ async function main() {
   const server = createServer((req, res) => {
     // Everything except the login page, its assets and the login API needs a session.
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    const isPublic = path === "/login" || path.startsWith("/_next/") || path === "/favicon.ico"
+    const isPublic = path === "/login" || path.startsWith("/_next/") || path === "/favicon.ico" || path === "/icon.svg"
       || path === "/api/login" || path === "/api/logout" || path === "/api/health";
     const user = sessionUser(req);
     if (!isPublic && !user) {
