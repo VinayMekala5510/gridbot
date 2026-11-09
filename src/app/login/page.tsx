@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { ThemeToggle } from "../components/ThemeToggle";
 import { api } from "../lib/client";
 
 export default function LoginPage() {
@@ -24,6 +25,7 @@ export default function LoginPage() {
 
   return (
     <main className="login-page">
+      <ThemeToggle className="login-theme" />
       <form className="login-card" onSubmit={submit}>
         <div className="brand login-brand"><span className="logo">▦</span>gridbot<span className="dot">.</span></div>
         <h1>Sign in</h1>

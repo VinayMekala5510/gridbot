@@ -4,6 +4,7 @@ import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
 import { AccountSettings } from "./components/AccountSettings";
 import { BotParameters } from "./components/BotParameters";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { api, fmtPnl, pnlClass } from "./lib/client";
 
 type Toast = { id: number; kind: "ok" | "error"; text: string };
@@ -107,6 +108,7 @@ export default function Dashboard() {
         <div className="topbar-right">
           {snap?.storage === "memory" && <span className="chip warn">In-memory storage</span>}
           <span className={`conn ${connected ? "on" : "off"}`}><i />{connected ? "Live" : "Reconnecting…"}</span>
+          <ThemeToggle />
           {user && <span className="user-chip">{user}</span>}
           <button className="btn ghost small" onClick={logout}>Log out</button>
         </div>
