@@ -31,7 +31,8 @@ async function load(exchange: ExchangeId): Promise<string[]> {
       const meta = await getJson(`${hyperliquidUrl(exchange)}/info`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "meta" }),
       }) as { universe: { name: string; isDelisted?: boolean }[] };
-      return ordered(meta.universe.filter(u => !u.isDelisted).map(u => u.name), s => s);
+      // Every Hyperliquid market traded here is a perpetual: name it that way (BTC-PERP).
+      return ordered(meta.universe.filter(u => !u.isDelisted).map(u => `${u.name}-PERP`), s => s.replace(/-PERP$/u, ""));
     }
     case "binance":
     case "solana":

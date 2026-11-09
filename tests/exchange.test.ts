@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Decimal from "decimal.js";
 import { roundHyperliquidPrice, wire, validateAddress, validatePrivateKey } from "../src/server/exchanges/hyperliquid";
-import { hyperliquidCoin } from "../src/server/exchanges/prices";
+import { hyperliquidCoin, resolveHyperliquidCoin } from "../src/server/exchanges/prices";
 
 process.env.MASTER_KEY = "11".repeat(32);
 
@@ -21,7 +21,10 @@ test("wire format strips trailing zeros", () => {
 });
 
 test("symbol normalisation for Hyperliquid perps", () => {
-  assert.equal(hyperliquidCoin("eth-perp"), "ETH");
+  assert.equal(hyperliquidCoin("ETH-PERP"), "ETH");
+  assert.equal(resolveHyperliquidCoin("eth-perp", ["BTC", "ETH"]), "ETH");
+  assert.equal(resolveHyperliquidCoin("KPEPE-PERP", ["kPEPE"]), "kPEPE");
+  assert.equal(resolveHyperliquidCoin("NOPE", ["BTC"]), null);
   assert.equal(hyperliquidCoin("BTC/USDC"), "BTC");
   assert.equal(hyperliquidCoin("SOL"), "SOL");
 });

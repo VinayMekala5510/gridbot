@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { encode } from "@msgpack/msgpack";
 import { Signature, Wallet, concat, getBytes, keccak256, isAddress } from "ethers";
 import type { ExchangeId, Side } from "../../shared/types";
-import { fetchPrice, hyperliquidCoin, hyperliquidUrl } from "./prices";
+import { fetchPrice, hyperliquidCoin, hyperliquidUrl, resolveHyperliquidCoin } from "./prices";
 import type { CancelResult, ExchangeAdapter, ExchangeFill, PlaceRequest, TrackedOrder } from "./types";
 
 // Hyperliquid perpetuals adapter (mainnet or testnet).
@@ -116,9 +116,10 @@ export class HyperliquidAccount {
   get signerAddress() { return this.wallet.address; }
 
   async asset(symbol: string): Promise<AssetMeta & { coin: string }> {
-    const coin = hyperliquidCoin(symbol);
-    const meta = (await assets(this.base)).get(coin);
-    if (!meta) throw new Error(`${coin} is not a Hyperliquid perpetual`);
+    const all = await assets(this.base);
+    const coin = resolveHyperliquidCoin(symbol, all.keys());
+    const meta = coin ? all.get(coin) : undefined;
+    if (!coin || !meta) throw new Error(`${hyperliquidCoin(symbol)} is not a Hyperliquid perpetual`);
     return { ...meta, coin };
   }
 
@@ -257,7 +258,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
   async fillsFor(symbol: string, open: TrackedOrder[], since: number) {
     if (!open.length) return { fills: [], cursor: Math.max(since, Date.now() - 60_000) };
-    const coin = hyperliquidCoin(symbol);
+    const { coin } = await this.account.asset(symbol);
     const ids = new Set(open.map(o => o.exchangeOrderId));
     const rows = await this.account.fillsSince(since);
     const fills: ExchangeFill[] = rows

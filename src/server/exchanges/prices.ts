@@ -26,9 +26,23 @@ export function hyperliquidUrl(exchange: ExchangeId): string {
   return exchange === "hyperliquid-testnet" ? "https://api.hyperliquid-testnet.xyz" : "https://api.hyperliquid.xyz";
 }
 
-/** "eth-perp", "ETH/USDC", "ETHUSDC" → "ETH" for Hyperliquid perps. */
+/**
+ * "eth-perp", "ETH/USDC", "ETHUSDC" → "ETH" for Hyperliquid perps. Case is kept
+ * (Hyperliquid has names like "kPEPE"); use `resolveHyperliquidCoin` to match the listing.
+ */
 export function hyperliquidCoin(symbol: string): string {
-  return symbol.trim().toUpperCase().replace(/[-/ ]?(PERP|USDC|USD)$/u, "").replace(/[-/ ]$/u, "");
+  return symbol.trim().replace(/[-/ ]?(PERP|USDC|USD)$/iu, "").replace(/[-/ ]$/u, "");
+}
+
+/** Finds the listed coin name for `symbol`, ignoring case ("btc-perp" → "BTC", "KPEPE" → "kPEPE"). */
+export function resolveHyperliquidCoin(symbol: string, listed: Iterable<string>): string | null {
+  const coin = hyperliquidCoin(symbol);
+  let caseInsensitive: string | null = null;
+  for (const name of listed) {
+    if (name === coin) return name;
+    if (!caseInsensitive && name.toUpperCase() === coin.toUpperCase()) caseInsensitive = name;
+  }
+  return caseInsensitive;
 }
 
 function spotPair(symbol: string): string {
@@ -62,8 +76,8 @@ export async function fetchPrice(exchange: ExchangeId, symbol: string): Promise<
       const mids = await cached(`hl-mids:${base}`, () => fetchJson(`${base}/info`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "allMids" }),
       })) as Record<string, string>;
-      const coin = hyperliquidCoin(symbol);
-      if (!(coin in mids)) throw new Error(`${coin} is not listed on ${exchange === "hyperliquid" ? "Hyperliquid" : "Hyperliquid Testnet"}`);
+      const coin = resolveHyperliquidCoin(symbol, Object.keys(mids));
+      if (!coin) throw new Error(`${hyperliquidCoin(symbol)} is not listed on ${exchange === "hyperliquid" ? "Hyperliquid" : "Hyperliquid Testnet"}`);
       return positive(mids[coin], coin);
     }
     case "binance":
