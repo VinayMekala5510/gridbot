@@ -87,10 +87,13 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
         <Metric label="Fees" value={fmt(bot.fees, 6)} />
         <Metric label="Filled" value={`${bot.fillSummary.buyCount}B / ${bot.fillSummary.sellCount}S`} />
         {(() => {
+          // Total of every completed roundtrip (entry + target pair), before fees.
+          const n = bot.roundtrips;
+          const total = bot.realizedPnl;
           const last = bot.recentRoundtrips[0];
-          const avg = bot.roundtrips ? Number(bot.realizedPnl) / bot.roundtrips : null;
-          return <Metric label="RTP PnL" value={last ? fmtPnl(last.pnl) : "—"} cls={last ? pnlClass(last.pnl) : ""}
-            sub={avg === null ? "no roundtrips yet" : `last · avg ${fmtPnl(avg)}`} title="Roundtrip PnL: profit of the latest entry + target pair, before fees. Avg = realized ÷ roundtrips." />;
+          return <Metric label={`RTP PnL (${n})`} value={n ? fmtPnl(total) : "—"} cls={n ? pnlClass(total) : ""}
+            sub={n ? `avg ${fmtPnl(Number(total) / n)}${last ? ` · last ${fmtPnl(last.pnl)}` : ""}` : "no roundtrips yet"}
+            title="Total PnL of all completed roundtrips (entry + target pairs), before fees." />;
         })()}
       </div>
 
