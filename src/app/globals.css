@@ -368,3 +368,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .row2 { grid-template-columns: 1fr; }
 }
+
+.target-price { font-weight: 600; }
+.target-price span { font-size: 10px; font-weight: 700; margin-right: 4px; }

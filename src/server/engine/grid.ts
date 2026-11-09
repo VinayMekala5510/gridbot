@@ -537,7 +537,7 @@ export class GridBot {
 function orderView(o: OrderRecord): OrderView {
   return {
     id: o.id, level: o.level, side: o.side, role: o.role, price: o.price, qty: o.qty, filledQty: o.filledQty,
-    status: o.status, refPrice: o.refPrice, createdAt: o.createdAt,
+    status: o.status, refPrice: o.refPrice, parentOrderId: o.parentOrderId, createdAt: o.createdAt,
   };
 }
 

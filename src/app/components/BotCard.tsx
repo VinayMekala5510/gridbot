@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { exchangeInfo } from "@/shared/exchanges";
-import type { BotStatus, BotView, OrderView } from "@/shared/types";
+import type { BotStatus, BotView, FillView, OrderView } from "@/shared/types";
 import { api, clock, fmt, fmtPnl, pnlClass, timeAgo } from "../lib/client";
 
 const STATUS_LABEL: Record<BotStatus, string> = {
@@ -109,11 +109,16 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
             </div>
             {bot.recentFills.length === 0 ? <p className="empty">No fills yet.</p> : (
               <table>
-                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th>Qty</th></tr></thead>
-                <tbody>{bot.recentFills.map(f => (
-                  <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
-                    <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td><td className="mono">{fmt(f.qty)}</td></tr>
-                ))}</tbody>
+                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th>Target price</th><th>Qty</th></tr></thead>
+                <tbody>{bot.recentFills.map(f => {
+                  const t = fillTarget(f, bot);
+                  return (
+                    <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
+                      <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td>
+                      <td className="mono target-price">{t ? <>{fmt(t.price)} <small className="muted">{t.waiting ? "waiting" : "closed"}</small></> : "—"}</td>
+                      <td className="mono">{fmt(f.qty)}</td></tr>
+                  );
+                })}</tbody>
               </table>
             )}
           </>
@@ -134,18 +139,46 @@ function Metric({ label, value, cls = "", big = false }: { label: string; value:
 
 function OrderTable({ orders, empty, targets = false }: { orders: OrderView[]; empty: string; targets?: boolean }) {
   if (!orders.length) return <p className="empty">{empty}</p>;
+  if (targets) {
+    // Target orders: the entry that filled, and the target price waiting to close it.
+    return (
+      <table>
+        <thead><tr><th>Lvl</th><th>Side</th><th>Entry fill</th><th>Target price</th><th>Qty</th><th>Status</th></tr></thead>
+        <tbody>{orders.map(o => (
+          <tr key={o.id}>
+            <td>{o.level > 0 ? `+${o.level}` : o.level}</td>
+            <td className={o.side}>{o.side.toUpperCase()}</td>
+            <td className="mono">{fmt(o.refPrice)}</td>
+            <td className="mono target-price">{fmt(o.price)}</td>
+            <td className="mono">{fmt(o.qty)}{Number(o.filledQty) > 0 && <small> ({fmt(o.filledQty)} filled)</small>}</td>
+            <td>{o.status}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    );
+  }
   return (
     <table>
-      <thead><tr><th>Lvl</th><th>Side</th><th>Price</th><th>Qty</th>{targets ? <th>Entry fill</th> : <th>Status</th>}</tr></thead>
+      <thead><tr><th>Lvl</th><th>Side</th><th>Price</th><th>Qty</th><th>Status</th></tr></thead>
       <tbody>{orders.map(o => (
         <tr key={o.id}>
           <td>{o.level > 0 ? `+${o.level}` : o.level}</td>
           <td className={o.side}>{o.side.toUpperCase()}</td>
           <td className="mono">{fmt(o.price)}</td>
           <td className="mono">{fmt(o.qty)}{Number(o.filledQty) > 0 && <small> ({fmt(o.filledQty)} filled)</small>}</td>
-          {targets ? <td className="mono">{fmt(o.refPrice)}</td> : <td>{o.status}</td>}
+          <td>{o.status}</td>
         </tr>
       ))}</tbody>
     </table>
   );
+}
+
+/** Target price for a filled entry: the live target order if it is waiting, else the level price ± target spread. */
+function fillTarget(f: FillView, bot: BotView): { price: number; waiting: boolean } | null {
+  if (f.role !== "entry") return null;
+  const open = bot.openTargets.find(t => t.parentOrderId === f.orderId);
+  if (open) return { price: Number(open.price), waiting: true };
+  const c = bot.config;
+  const level = Number(c.entryPrice) + f.level * Number(c.spread);
+  return { price: f.side === "buy" ? level + Number(c.targetSpread) : level - Number(c.targetSpread), waiting: false };
 }

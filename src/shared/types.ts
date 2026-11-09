@@ -63,6 +63,8 @@ export interface OrderView {
   qty: string;
   filledQty: string;
   status: OrderStatus;
+  /** Entry order this target closes (targets only). */
+  parentOrderId: number | null;
   /** Average fill price of the entry this target closes (targets only). */
   refPrice: string | null;
   createdAt: number;
