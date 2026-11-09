@@ -82,6 +82,17 @@ export interface FillView {
   time: number;
 }
 
+export interface RoundtripView {
+  targetOrderId: number;
+  level: number;
+  entryPrice: string;
+  exitPrice: string;
+  qty: string;
+  /** Profit of this entry + target pair before fees (quote currency, e.g. USD). */
+  pnl: string;
+  time: number;
+}
+
 export interface EventView {
   time: number;
   level: "info" | "warn" | "error";
@@ -116,6 +127,8 @@ export interface BotView {
   openEntries: OrderView[];
   openTargets: OrderView[];
   recentFills: FillView[];
+  /** Latest completed roundtrips (newest first), keyed to the target order that closed them. */
+  recentRoundtrips: RoundtripView[];
   fillSummary: FillSummary;
   events: EventView[];
   createdAt: number;

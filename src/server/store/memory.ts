@@ -90,6 +90,9 @@ export class MemoryStore implements Store {
   }
 
   async insertRoundtrip(r: RoundtripRecord) { this.roundtrips.push({ ...r }); }
+  async recentRoundtrips(botId: number, limit: number) {
+    return this.roundtrips.filter(r => r.botId === botId).slice(-limit).reverse().map(r => ({ ...r }));
+  }
   async insertEvent(e: EventRecord) { this.events.push({ ...e }); }
   async recentEvents(botId: number, limit: number) {
     return this.events.filter(e => e.botId === botId).slice(-limit).reverse();

@@ -292,6 +292,16 @@ export class MysqlStore implements Store {
       [r.botId, r.level, r.entryOrderId, r.targetOrderId, r.entrySide, r.entryPrice, r.exitPrice, r.qty, r.pnl,
         new Date(r.time)]);
   }
+  async recentRoundtrips(botId: number, limit: number) {
+    const [rows] = await this.pool.query<Row[]>(
+      "SELECT * FROM roundtrips WHERE bot_id = ? ORDER BY id DESC LIMIT ?", [botId, limit]);
+    return rows.map(r => ({
+      botId: Number(r.bot_id), level: Number(r.level), entryOrderId: Number(r.entry_order_id),
+      targetOrderId: Number(r.target_order_id), entrySide: r.entry_side as RoundtripRecord["entrySide"],
+      entryPrice: dec(r.entry_price), exitPrice: dec(r.exit_price), qty: dec(r.qty), pnl: dec(r.pnl),
+      time: ms(r.completed_at),
+    }));
+  }
   async insertEvent(e: EventRecord) {
     await this.pool.execute("INSERT INTO events (bot_id, level, message, created_at) VALUES (?,?,?,?)",
       [e.botId, e.level, e.message.slice(0, 1000), new Date(e.time)]);

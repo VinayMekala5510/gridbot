@@ -119,6 +119,7 @@ export interface Store {
   fillAggregates(botId: number): Promise<FillAggregate[]>;
 
   insertRoundtrip(r: RoundtripRecord): Promise<void>;
+  recentRoundtrips(botId: number, limit: number): Promise<RoundtripRecord[]>;
   insertEvent(e: EventRecord): Promise<void>;
   recentEvents(botId: number, limit: number): Promise<EventRecord[]>;
 }

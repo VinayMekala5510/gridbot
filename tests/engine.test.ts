@@ -168,3 +168,19 @@ test("a bot started before the 3 + 3 rule cancels its extra entries, keeping the
   assert.deepEqual(open.filter(o => o.side === "sell").map(o => o.price).sort(), ["101", "102", "103"]);
   assert.equal(store.orders.filter(o => o.status === "canceled").length, 10);
 });
+
+test("the bot view lists each roundtrip's PnL against the target order that closed it", async () => {
+  const { bot, open, setPrice, store } = await setup({ mmQty: "10" });
+  await bot.tick();
+  setPrice(101.2);
+  await bot.tick();
+  const target = open().find(o => o.role === "target")!;
+  setPrice(100.4);
+  await bot.tick();
+  const view = bot.view();
+  assert.equal(view.recentRoundtrips.length, 1);
+  assert.equal(view.recentRoundtrips[0].targetOrderId, target.id);
+  assert.equal(view.recentRoundtrips[0].pnl, "0.5");
+  assert.ok(view.recentFills.some(f => f.role === "target" && f.orderId === target.id));
+  assert.equal((await store.recentRoundtrips(bot.id, 10)).length, 1);
+});

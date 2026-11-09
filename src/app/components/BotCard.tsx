@@ -109,14 +109,15 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
             </div>
             {bot.recentFills.length === 0 ? <p className="empty">No fills yet.</p> : (
               <table>
-                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th>Target price</th><th>Qty</th></tr></thead>
+                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th>Target price</th><th>Qty</th><th title="Roundtrip PnL: profit of the entry + target pair, before fees">RTP PnL</th></tr></thead>
                 <tbody>{bot.recentFills.map(f => {
                   const t = fillTarget(f, bot);
                   return (
                     <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
                       <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td>
                       <td className="mono target-price">{t ? <>{fmt(t.price)} <small className="muted">{t.waiting ? "waiting" : "closed"}</small></> : "—"}</td>
-                      <td className="mono">{fmt(f.qty)}</td></tr>
+                      <td className="mono">{fmt(f.qty)}</td>
+                      <td className="mono">{(() => { const rt = f.role === "target" ? bot.recentRoundtrips.find(r => r.targetOrderId === f.orderId) : null; return rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"; })()}</td></tr>
                   );
                 })}</tbody>
               </table>

@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { randomBytes } from "node:crypto";
 import type { BotStatus, BotView, EventView, OrderRole, OrderView, Side } from "../../shared/types";
 import type { ExchangeAdapter, ExchangeFill } from "../exchanges/types";
-import type { BotRecord, FillRecord, OrderRecord, Store } from "../store/types";
+import type { BotRecord, FillRecord, OrderRecord, RoundtripRecord, Store } from "../store/types";
 
 const D = Decimal.clone({ precision: 40 });
 type Dec = Decimal;
@@ -44,6 +44,7 @@ export class GridBot {
   private orders = new Map<number, OrderRecord>();
   private seenTrades = new Set<string>();
   private recentFills: FillRecord[] = [];
+  private recentRoundtrips: RoundtripRecord[] = [];
   private events: EventView[] = [];
   private summary = { buy: { count: 0, qty: ZERO, notional: ZERO }, sell: { count: 0, qty: ZERO, notional: ZERO } };
   private levels: Level[] = [];
@@ -102,6 +103,7 @@ export class GridBot {
     for (const o of open) this.orders.set(o.id, o);
     for (const t of await this.store.fillTradeIds(this.id, open.map(o => o.id))) this.seenTrades.add(t);
     this.recentFills = await this.store.recentFills(this.id, 50);
+    this.recentRoundtrips = await this.store.recentRoundtrips(this.id, 50);
     for (const a of await this.store.fillAggregates(this.id)) {
       this.summary[a.side] = { count: a.count, qty: new D(a.qty), notional: new D(a.notional) };
     }
@@ -266,10 +268,12 @@ export class GridBot {
     const pnl = entrySide === "buy" ? exitPrice.minus(entryPrice).times(coins) : entryPrice.minus(exitPrice).times(coins);
     this.rec.roundtrips++;
     this.rec.realizedPnl = new D(this.rec.realizedPnl).plus(pnl).toFixed();
-    await this.store.insertRoundtrip({
+    const roundtrip: RoundtripRecord = {
       botId: this.id, level: target.level, entryOrderId: target.parentOrderId ?? 0, targetOrderId: target.id, entrySide,
       entryPrice: entryPrice.toFixed(), exitPrice: exitPrice.toFixed(), qty: qty.toFixed(), pnl: pnl.toFixed(), time: Date.now(),
-    });
+    };
+    await this.store.insertRoundtrip(roundtrip);
+    this.recentRoundtrips = [roundtrip, ...this.recentRoundtrips].slice(0, 50);
     await this.store.updateBot(this.id, { roundtrips: this.rec.roundtrips, realizedPnl: this.rec.realizedPnl });
     this.info(`Roundtrip #${this.rec.roundtrips} on L${target.level}: PnL ${pnl.toSignificantDigits(8).toFixed()}`);
   }
@@ -506,6 +510,9 @@ export class GridBot {
       activeLevels: this.levels.length,
       openEntries: open.filter(o => o.role === "entry").map(orderView),
       openTargets: targets.map(orderView),
+      recentRoundtrips: this.recentRoundtrips.map(r => ({
+        targetOrderId: r.targetOrderId, level: r.level, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
+      })),
       recentFills: this.recentFills.slice(0, 25).map(f => ({
         id: f.id, orderId: f.orderId, level: f.level, role: f.role, side: f.side, price: f.price, qty: f.qty, fee: f.fee, time: f.time,
       })),
