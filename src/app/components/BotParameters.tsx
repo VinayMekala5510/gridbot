@@ -20,7 +20,26 @@ const empty = {
 export function BotParameters({ accounts, activeAccountId, notify, onCreated }: Props) {
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
+  const [symbols, setSymbols] = useState<{ list: string[] | null; loading: boolean; error: string | null }>({ list: null, loading: true, error: null });
   const info = exchangeInfo(form.exchange);
+
+  // Load the exchange's symbol list whenever the exchange changes; keep the symbol if it still exists.
+  useEffect(() => {
+    let cancelled = false;
+    setSymbols({ list: null, loading: true, error: null });
+    api<{ symbols: string[] }>(`/api/symbols?exchange=${form.exchange}`)
+      .then(({ symbols: list }) => {
+        if (cancelled) return;
+        setSymbols({ list, loading: false, error: null });
+        setForm(f => (list.includes(f.symbol) ? f : { ...f, symbol: list[0] ?? "" }));
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setSymbols({ list: null, loading: false, error: (err as Error).message });
+        notify("error", `${(err as Error).message} You can type the symbol instead.`);
+      });
+    return () => { cancelled = true; };
+  }, [form.exchange]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -116,9 +135,19 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
         </Card>
 
         <Card title="Trading" icon="〰">
-          <Field label="Symbol" info={`Ticker on ${info.label}, e.g. ${info.symbolHint}.`}>
+          <Field label="Symbol" info={`All tradable symbols on ${info.label}${symbols.list ? ` (${symbols.list.length})` : ""}. Type a letter to jump through the list.`}>
             <div className="inline">
-              <input value={form.symbol} onChange={set("symbol")} placeholder={info.symbolHint} maxLength={40} required spellCheck={false} />
+              {symbols.list ? (
+                <select value={form.symbol} onChange={set("symbol")} required>
+                  {!symbols.list.includes(form.symbol) && <option value="">Select a symbol…</option>}
+                  {symbols.list.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : symbols.loading ? (
+                <select disabled><option>Loading {info.label} symbols…</option></select>
+              ) : (
+                <input value={form.symbol} onChange={set("symbol")} placeholder={info.symbolHint} maxLength={40} required spellCheck={false}
+                  title={symbols.error ?? undefined} />
+              )}
               <button type="button" className="btn ghost" onClick={useMarket} disabled={busy}>Use market</button>
             </div>
           </Field>

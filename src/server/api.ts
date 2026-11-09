@@ -3,6 +3,7 @@ import { z } from "zod";
 import { EXCHANGE_IDS } from "../shared/exchanges";
 import { attemptLogin, clearSession, sessionUser } from "./auth";
 import { hasMasterKey } from "./crypto";
+import { listSymbols } from "./exchanges/symbols";
 import { BotManager, UserError } from "./engine/manager";
 import { message } from "./engine/grid";
 
@@ -102,6 +103,15 @@ export async function handleApi(manager: BotManager, req: IncomingMessage, res: 
 
     if (method === "GET" && path === "/api/health") {
       return send(res, 200, { ok: true, masterKey: hasMasterKey() }), true;
+    }
+
+    if (method === "GET" && path === "/api/symbols") {
+      const exchange = parse(z.enum(EXCHANGE_IDS), url.searchParams.get("exchange"));
+      try {
+        return send(res, 200, { symbols: await listSymbols(exchange) }), true;
+      } catch (err) {
+        throw new UserError(`Could not load the symbol list: ${message(err)}`);
+      }
     }
 
     if (method === "GET" && path === "/api/price") {
