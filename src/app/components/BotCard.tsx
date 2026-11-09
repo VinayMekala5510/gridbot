@@ -15,7 +15,7 @@ const STATUS_LABEL: Record<BotStatus, string> = {
 
 type Tab = "orders" | "targets" | "fills" | "activity";
 
-export function BotCard({ bot, now, notify }: { bot: BotView; now: number; notify: (kind: "ok" | "error", text: string) => void }) {
+export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: number; notify: (kind: "ok" | "error", text: string) => void; onRemoved?: () => void }) {
   const [tab, setTab] = useState<Tab>("orders");
   const [busy, setBusy] = useState(false);
   const c = bot.config;
@@ -32,12 +32,12 @@ export function BotCard({ bot, now, notify }: { bot: BotView; now: number; notif
   }
   async function archive() {
     setBusy(true);
-    try { await api(`/api/bots/${bot.id}/archive`, "POST"); }
+    try { await api(`/api/bots/${bot.id}/archive`, "POST"); notify("ok", `"${c.name}" removed from the dashboard.`); onRemoved?.(); }
     catch (err) { notify("error", (err as Error).message); setBusy(false); }
   }
 
   return (
-    <article className={`bot-card status-${bot.status}`}>
+    <article className={`bot-card detail status-${bot.status}`}>
       <header className="bot-head">
         <div className="bot-title">
           <h3>{c.name}</h3>

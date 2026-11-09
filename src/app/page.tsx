@@ -4,6 +4,7 @@ import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
 import { AccountSettings } from "./components/AccountSettings";
 import { BotParameters } from "./components/BotParameters";
+import { BotTile, botTag } from "./components/BotTile";
 import { Logo } from "./components/Logo";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { api, fmtPnl, pnlClass } from "./lib/client";
@@ -27,13 +28,16 @@ export default function Dashboard() {
   const [killing, setKilling] = useState(false);
   const [user, setUser] = useState<string | null>(null);
   const [view, setView] = useState<View>("dashboard");
+  const [detailId, setDetailId] = useState<number | null>(null);
   const toastId = useRef(0);
 
-  // The current page lives in the URL hash so refresh and back/forward keep it.
+  // The current page lives in the URL hash (#accounts, #new-bot, #bot-12) so refresh and back/forward keep it.
   useEffect(() => {
     const read = () => {
-      const h = window.location.hash.slice(1) as View;
-      setView(VIEWS.some(v => v.id === h) ? h : "dashboard");
+      const h = window.location.hash.slice(1);
+      const bot = /^bot-(\d+)$/u.exec(h);
+      setDetailId(bot ? Number(bot[1]) : null);
+      setView(VIEWS.some(v => v.id === h) ? (h as View) : "dashboard");
     };
     read();
     window.addEventListener("hashchange", read);
@@ -43,8 +47,18 @@ export default function Dashboard() {
   function go(next: View) {
     if (window.location.hash !== `#${next}`) window.location.hash = next;
     setView(next);
+    setDetailId(null);
     window.scrollTo({ top: 0 });
   }
+
+  function openBot(id: number) {
+    window.location.hash = `bot-${id}`;
+    setView("dashboard");
+    setDetailId(id);
+    window.scrollTo({ top: 0 });
+  }
+
+  const detailBot = detailId === null ? null : snap?.bots.find(b => b.id === detailId) ?? null;
 
   const notify = useCallback((kind: Toast["kind"], text: string) => {
     const id = ++toastId.current;
@@ -134,7 +148,25 @@ export default function Dashboard() {
           {view === "new-bot" && (
             <BotParameters accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} notify={notify} onCreated={() => go("dashboard")} />
           )}
-          {view === "dashboard" && <>
+          {view === "dashboard" && detailId !== null && (
+            <div className="page detail-page">
+              <button className="back-btn" onClick={() => go("dashboard")}>← Back to bots</button>
+              {detailBot && snap ? (
+                <>
+                  <div className="detail-meta">
+                    <span className="tile-tag">STEP-GRID</span>
+                    <span className="tile-hash">#{botTag(detailBot)}</span>
+                    <span className="muted small">Started {new Date(detailBot.createdAt).toLocaleString("en-US")}
+                      {detailBot.stoppedAt ? ` · Stopped ${new Date(detailBot.stoppedAt).toLocaleString("en-US")}` : ""}</span>
+                  </div>
+                  <BotCard bot={detailBot} now={snap.serverTime} notify={notify} onRemoved={() => go("dashboard")} />
+                </>
+              ) : (
+                <div className="placeholder">{snap ? "This bot is no longer on the dashboard." : "Loading…"}</div>
+              )}
+            </div>
+          )}
+          {view === "dashboard" && detailId === null && <>
           <section className="overview">
             <div className="stat"><span>Total combined PnL</span><b className={`mono ${pnlClass(snap?.totals.netPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.netPnl) : "—"}</b><small>realized + unrealized − fees</small></div>
             <div className="stat"><span>Running bots</span><b className="mono">{snap ? snap.totals.runningBots : "—"}</b><small>of {snap?.totals.totalBots ?? 0} on dashboard</small></div>
@@ -164,7 +196,7 @@ export default function Dashboard() {
                   : "No bots match this filter."}
               </div>
             ) : (
-              <div className="cards">{bots.map(b => <BotCard key={b.id} bot={b} now={snap.serverTime} notify={notify} />)}</div>
+              <div className="tiles">{bots.map(b => <BotTile key={b.id} bot={b} onOpen={() => openBot(b.id)} />)}</div>
             )}
           </>}
         </main>

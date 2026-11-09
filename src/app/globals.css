@@ -264,6 +264,55 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .toast.ok { border-left: 3px solid var(--buy); }
 .toast.error { border-left: 3px solid var(--danger); }
 
+/* ── Compact bot cards (dashboard grid) ── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.bot-tile {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 18px 18px 16px; border-radius: 16px;
+  background: var(--panel); border: 1px solid var(--line);
+  transition: border-color .15s ease, transform .15s ease;
+}
+.bot-tile:hover { border-color: var(--line-2); }
+.tile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.tile-symbol { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-badge {
+  flex: none; padding: 4px 9px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  background: var(--panel-2); color: var(--muted); border: 1px solid var(--line-2);
+}
+.tile-badge.running { color: var(--buy); background: rgba(34, 197, 139, .12); border-color: rgba(34, 197, 139, .35); }
+.tile-badge.starting { color: var(--accent-2); background: rgba(79, 140, 255, .12); border-color: rgba(79, 140, 255, .35); }
+.tile-badge.halted { color: var(--warn); background: rgba(245, 184, 74, .12); border-color: rgba(245, 184, 74, .35); }
+.tile-badge.error { color: var(--danger-text); background: rgba(255, 46, 67, .12); border-color: rgba(255, 46, 67, .35); }
+.tile-exchange { font-size: 14px; color: var(--muted); letter-spacing: .02em; }
+.tile-account { font-size: 12px; color: var(--faint); letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-tags { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; flex-wrap: wrap; }
+.tile-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 3px 7px; border-radius: 5px;
+  color: var(--buy); background: rgba(34, 197, 139, .14);
+}
+.tile-tag.paper { color: var(--accent-2); background: rgba(79, 140, 255, .14); }
+.tile-tag.live { color: var(--live); background: rgba(255, 138, 61, .16); }
+.tile-hash { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.tile-name { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-times { font-size: 12px; color: var(--faint); line-height: 1.5; margin-bottom: 8px; }
+.tile-open {
+  margin-top: auto; height: 44px; width: 100%; border-radius: 10px; border: 1px solid var(--line-2);
+  background: var(--panel-2); color: var(--text); font-weight: 700; font-size: 14px;
+}
+.tile-open:hover { border-color: var(--accent); }
+.bot-tile.tile-running { border-top: 3px solid var(--buy); }
+.bot-tile.tile-halted { border-top: 3px solid var(--warn); }
+.bot-tile.tile-error { border-top: 3px solid var(--danger); }
+
+/* ── Bot details view ── */
+.detail-page { max-width: 1100px; }
+.back-btn { background: none; border: 0; padding: 0; margin-bottom: 14px; color: var(--accent-2); font-weight: 600; font-size: 14px; }
+.back-btn:hover { text-decoration: underline; }
+.detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.bot-card.detail { padding: 22px; gap: 16px; }
+.bot-card.detail .bot-title h3 { font-size: 22px; }
+.bot-card.detail .tab-body { max-height: 520px; }
+
 /* ── Instance kill switch ── */
 .kill-btn {
   display: inline-flex; align-items: center; gap: 8px; flex: none;
