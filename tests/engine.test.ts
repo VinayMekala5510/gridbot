@@ -149,3 +149,22 @@ test("when an entry fills, the next level on that side is placed to keep 3 per s
   await bot.tick(); // nothing else changes on a quiet tick
   assert.equal(open().filter(o => o.role === "entry").length, 6);
 });
+
+test("a bot started before the 3 + 3 rule cancels its extra entries, keeping the nearest", async () => {
+  const store = new MemoryStore();
+  const adapter = new PaperAdapter(async () => new Decimal(100));
+  const rec = await store.createBot({ ...base, steps: 8, mmQty: "100", upperLimit: "120", lowerLimit: "80" }, "idle");
+  const old = new GridBot(rec, store, adapter, { tickMs: 60_000, maxOpenPerSide: 10 });
+  await old.load();
+  await old.tick();
+  assert.equal(store.orders.filter(o => o.status === "open").length, 16, "old behaviour: every level placed");
+  old.suspend();
+
+  const resumed = new GridBot((await store.listBots())[0], store, adapter, { tickMs: 60_000 });
+  await resumed.load();
+  await resumed.tick();
+  const open = store.orders.filter(o => o.status === "open");
+  assert.deepEqual(open.filter(o => o.side === "buy").map(o => o.price).sort(), ["97", "98", "99"]);
+  assert.deepEqual(open.filter(o => o.side === "sell").map(o => o.price).sort(), ["101", "102", "103"]);
+  assert.equal(store.orders.filter(o => o.status === "canceled").length, 10);
+});

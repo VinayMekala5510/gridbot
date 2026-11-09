@@ -174,6 +174,8 @@ export class GridBot {
       await this.store.updateBot(this.id, { status: "running" });
       this.info(`Running. ${this.levels.length} grid levels inside the limits.`);
     }
+    await this.trimEntries(price);
+    if (this.isStopped || this.isFrozen()) return;
     await this.placeEntries(price);
   }
 
@@ -278,6 +280,45 @@ export class GridBot {
   }
 
   // ── Orders ───────────────────────────────────────────────────────────
+
+  /**
+   * Cancels entry orders beyond the per-side window (e.g. bots started before the
+   * 3 + 3 rule), keeping the ones nearest the market. Partly filled orders are kept.
+   */
+  private async trimEntries(price: Dec) {
+    const excess: OrderRecord[] = [];
+    for (const side of ["buy", "sell"] as const) {
+      const entries = [...this.orders.values()]
+        .filter(o => o.role === "entry" && o.side === side && o.status === "open" && o.exchangeOrderId)
+        .sort((a, b) => new D(a.price).minus(price).abs().cmp(new D(b.price).minus(price).abs()));
+      const pending = [...this.orders.values()].filter(o => o.role === "entry" && o.side === side && o.status === "pending").length;
+      const extra = entries.length + pending - this.maxOpenPerSide;
+      if (extra <= 0) continue;
+      excess.push(...entries.slice(-extra).filter(o => new D(o.filledQty).isZero()));
+    }
+    if (!excess.length) return;
+
+    let canceled: Set<string>;
+    try {
+      const res = await this.adapter.cancel(this.symbol, excess.map(o => o.exchangeOrderId!));
+      canceled = new Set(res.canceled);
+      for (const f of res.failed) this.warn(`Could not cancel extra order ${f.exchangeOrderId}: ${f.error}`);
+    } catch (err) {
+      this.warn(`Could not cancel extra orders: ${message(err)}`);
+      return;
+    }
+    // An order may have filled just before the cancel arrived: record that first.
+    if (this.adapter.live) await this.syncFills(true);
+    let n = 0;
+    for (const order of excess) {
+      if (order.status !== "open" || !canceled.has(order.exchangeOrderId!)) continue;
+      order.status = "canceled";
+      this.orders.delete(order.id);
+      await this.store.updateOrder(order.id, { status: "canceled" });
+      n++;
+    }
+    if (n) this.info(`Canceled ${n} extra entry order(s) to keep ${this.maxOpenPerSide} buy + ${this.maxOpenPerSide} sell open`);
+  }
 
   private async placeEntries(price: Dec) {
     const busy = new Set([...this.orders.values()].map(o => o.level));
