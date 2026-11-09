@@ -33,9 +33,10 @@ interface Level { k: number; side: Side; price: Dec }
  * fill-order price ∓ targetSpread → (fill) → roundtrip, level re-armed.
  *
  * Safety:
- * - Volume cap: entry fills accumulate for the bot's lifetime. Open entry
- *   quantity is limited so filled + open never exceeds Market Making Qty.
- *   Once less than one step of room is left, the bot halts and cancels all.
+ * - Volume cap: entry fills accumulate for the bot's lifetime. Orders always refill
+ *   (3 buy + 3 sell open); once filled volume leaves less than one step of room
+ *   under Market Making Qty, the bot halts and cancels all. Fills that land at the
+ *   same moment can overshoot by at most the open entries.
  * - Price limits: market above upper / below lower → halt and cancel all.
  * - Kill switch: halt and cancel all.
  */
@@ -326,10 +327,11 @@ export class GridBot {
 
   private async placeEntries(price: Dec) {
     const busy = new Set([...this.orders.values()].map(o => o.level));
-    const openEntryQty = [...this.orders.values()]
-      .filter(o => o.role === "entry")
-      .reduce((sum, o) => sum.plus(new D(o.qty).minus(o.filledQty)), ZERO);
-    let budget = new D(this.rec.config.mmQty).minus(this.rec.entryFilledQty).minus(openEntryQty);
+    // Always refill: open orders do not reserve the cap. New entries are placed while
+    // filled entry volume still has room for at least one more step; the bot halts
+    // once filled volume reaches Market making qty (simultaneous fills may overshoot
+    // by up to the open entries).
+    const room = new D(this.rec.config.mmQty).minus(this.rec.entryFilledQty);
     const stepQty = await this.adapter.roundQty(this.symbol, new D(this.rec.config.stepQty));
     // Only a window of levels rests at once: at most MAX_OPEN_PER_SIDE buy entries and as
     // many sell entries. When one fills, the next free level on that side is placed.
@@ -339,12 +341,11 @@ export class GridBot {
       .filter(l => !busy.has(l.k))
       .sort((a, b) => a.price.minus(price).abs().cmp(b.price.minus(price).abs()));
     for (const level of candidates) {
-      if (budget.lt(stepQty) || this.isStopped || this.isFrozen()) break;
+      if (room.lt(stepQty) || this.isStopped || this.isFrozen()) break;
       if (openPerSide[level.side] >= this.maxOpenPerSide) continue;
       const ok = await this.placeOrder({ level: level.k, side: level.side, role: "entry", price: level.price, qty: stepQty });
       if (!ok) break;
       openPerSide[level.side]++;
-      budget = budget.minus(stepQty);
     }
   }
 

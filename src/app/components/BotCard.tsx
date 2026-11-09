@@ -86,6 +86,12 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
         <Metric label="Unrealized" value={fmtPnl(bot.unrealizedPnl)} cls={pnlClass(bot.unrealizedPnl)} />
         <Metric label="Fees" value={fmt(bot.fees, 6)} />
         <Metric label="Filled" value={`${bot.fillSummary.buyCount}B / ${bot.fillSummary.sellCount}S`} />
+        {(() => {
+          const last = bot.recentRoundtrips[0];
+          const avg = bot.roundtrips ? Number(bot.realizedPnl) / bot.roundtrips : null;
+          return <Metric label="RTP PnL" value={last ? fmtPnl(last.pnl) : "—"} cls={last ? pnlClass(last.pnl) : ""}
+            sub={avg === null ? "no roundtrips yet" : `last · avg ${fmtPnl(avg)}`} title="Roundtrip PnL: profit of the latest entry + target pair, before fees. Avg = realized ÷ roundtrips." />;
+        })()}
       </div>
 
       <nav className="tabs" role="tablist">
@@ -134,8 +140,8 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
   );
 }
 
-function Metric({ label, value, cls = "", big = false }: { label: string; value: string; cls?: string; big?: boolean }) {
-  return <div className={`metric ${big ? "big" : ""}`}><span>{label}</span><b className={`mono ${cls}`}>{value}</b></div>;
+function Metric({ label, value, cls = "", big = false, sub, title }: { label: string; value: string; cls?: string; big?: boolean; sub?: string; title?: string }) {
+  return <div className={`metric ${big ? "big" : ""}`} title={title}><span>{label}</span><b className={`mono ${cls}`}>{value}</b>{sub && <small className="metric-sub">{sub}</small>}</div>;
 }
 
 function OrderTable({ orders, empty, targets = false }: { orders: OrderView[]; empty: string; targets?: boolean }) {

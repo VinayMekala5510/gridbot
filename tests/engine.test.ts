@@ -26,12 +26,12 @@ async function setup(overrides: Partial<BotConfig> = {}) {
   };
 }
 
-test("places the nearest entry orders that fit the volume budget", async () => {
+test("places the 3 nearest buy and sell entries", async () => {
   const { bot, open } = await setup();
   await bot.tick();
   assert.equal(bot.rec.status, "running");
   const prices = open().map(o => `${o.side}@${o.price}`).sort();
-  assert.deepEqual(prices, ["buy@98", "buy@99", "sell@101", "sell@102"]);
+  assert.deepEqual(prices, ["buy@97", "buy@98", "buy@99", "sell@101", "sell@102", "sell@103"]);
   assert.ok(open().every(o => o.role === "entry" && o.qty === "1"));
 });
 
@@ -71,10 +71,10 @@ test("buy entry fill places a sell target above it", async () => {
   assert.equal(bot.rec.realizedPnl, "0.5");
 });
 
-test("volume cap halts the bot and cancels every order without exceeding the ceiling", async () => {
+test("volume cap halts the bot and cancels every order once filled volume reaches it", async () => {
   const { bot, open, setPrice } = await setup({ mmQty: "2" });
   await bot.tick();
-  assert.equal(open().length, 2, "only two steps of room");
+  assert.equal(open().length, 6, "orders are not limited by the cap, only by 3 + 3");
   setPrice(101.5);
   await bot.tick(); // sell +1 fills (1 of 2)
   assert.equal(bot.rec.status, "running");
@@ -183,4 +183,15 @@ test("the bot view lists each roundtrip's PnL against the target order that clos
   assert.equal(view.recentRoundtrips[0].pnl, "0.5");
   assert.ok(view.recentFills.some(f => f.role === "target" && f.orderId === target.id));
   assert.equal((await store.recentRoundtrips(bot.id, 10)).length, 1);
+});
+
+test("always refills after a fill even when filled + open exceeds the cap (BTC-TEST case)", async () => {
+  const { bot, open, setPrice } = await setup({ steps: 6, mmQty: "6", upperLimit: "120", lowerLimit: "80" });
+  await bot.tick();
+  assert.equal(open().filter(o => o.role === "entry").length, 6);
+  setPrice(101.2);
+  await bot.tick(); // sell +1 fills: filled 1 of 6, 5 entries open
+  const sells = open().filter(o => o.role === "entry" && o.side === "sell").map(o => o.price).sort();
+  assert.deepEqual(sells, ["102", "103", "104"], "next sell level placed");
+  assert.equal(bot.rec.status, "running");
 });

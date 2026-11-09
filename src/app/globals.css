@@ -237,7 +237,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .bar-fill { height: 100%; background: var(--accent); transition: width .4s ease; }
 .bar-fill.warm { background: var(--warn); }
 .bar-fill.hot { background: var(--danger); }
-.metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) repeat(4, minmax(0, 1fr)); gap: 8px; }
+.metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) repeat(5, minmax(0, 1fr)); gap: 8px; }
+.metric-sub { display: block; font-size: 10px; color: var(--faint); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1100px) { .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .metric { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
 .metric span { display: block; font-size: 11px; color: var(--muted); }
 .metric b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

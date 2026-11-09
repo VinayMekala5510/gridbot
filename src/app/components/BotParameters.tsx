@@ -162,7 +162,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
         </Card>
 
         <Card title="Risk / Limits" icon="⛨">
-          <Num label="Market making qty" info="Hard ceiling on total filled entry quantity. When reached, the bot stops and cancels all its orders." value={form.mmQty} onChange={set("mmQty")} />
+          <Num label="Market making qty" info="Ceiling on total filled entry quantity. Orders keep refilling (3 buy + 3 sell); once filled volume reaches this, the bot stops and cancels all its orders. Fills at the same moment can go over by up to the open orders." value={form.mmQty} onChange={set("mmQty")} />
           <div className="row2">
             <Num label="Upper limit" info="If the market price rises above this, the bot stops completely." value={form.upperLimit} onChange={set("upperLimit")} />
             <Num label="Lower limit" info="If the market price falls below this, the bot stops completely." value={form.lowerLimit} onChange={set("lowerLimit")} />
