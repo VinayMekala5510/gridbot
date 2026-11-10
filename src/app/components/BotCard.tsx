@@ -183,11 +183,15 @@ function OrderTable({ orders, empty, targets = false }: { orders: OrderView[]; e
   );
 }
 
-/** Target price for a filled entry: the live target order if it is waiting, else the level price ± target spread. */
+/**
+ * Closed target price for a fill row, or null (shown as "—").
+ * - Target fills: the price that target closed at.
+ * - Entry fills: the level price ± target spread, only once its target has filled;
+ *   while the target is still resting nothing is shown.
+ */
 function fillTarget(f: FillView, bot: BotView): { price: number; waiting: boolean } | null {
-  if (f.role !== "entry") return null;
-  const open = bot.openTargets.find(t => t.parentOrderId === f.orderId);
-  if (open) return { price: Number(open.price), waiting: true };
+  if (f.role === "target") return { price: Number(f.price), waiting: false };
+  if (bot.openTargets.some(t => t.parentOrderId === f.orderId)) return null;
   const c = bot.config;
   const level = Number(c.entryPrice) + f.level * Number(c.spread);
   return { price: f.side === "buy" ? level + Number(c.targetSpread) : level - Number(c.targetSpread), waiting: false };
