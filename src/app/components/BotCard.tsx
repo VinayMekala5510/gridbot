@@ -118,15 +118,18 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
             </div>
             {bot.recentFills.length === 0 ? <p className="empty">No fills yet.</p> : (
               <table>
-                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th>Target price</th><th>Qty</th><th title="Roundtrip PnL: profit of the entry + target pair, before fees">RTP PnL</th></tr></thead>
+                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th title="Actual price the target order filled at on the exchange (entry rows, once the target has filled)">Target filled at</th><th>Qty</th><th title="Roundtrip PnL: profit of the entry + target pair, before fees">RTP PnL</th></tr></thead>
                 <tbody>{bot.recentFills.map(f => {
-                  const t = fillTarget(f, bot);
+                  // Roundtrip this fill belongs to: entry rows by entry order, target rows by target order.
+                  const rt = f.role === "entry"
+                    ? bot.recentRoundtrips.find(r => r.entryOrderId === f.orderId)
+                    : bot.recentRoundtrips.find(r => r.targetOrderId === f.orderId);
                   return (
                     <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
                       <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td>
-                      <td className="mono target-price">{t ? <>{fmt(t.price)} <small className={`target-state ${t.waiting ? "open" : "closed"}`}>{t.waiting ? "Open" : "Closed"}</small></> : "—"}</td>
+                      <td className="mono target-price">{f.role === "entry" && rt ? <>{fmt(rt.exitPrice)} <small className="target-state closed">Closed</small></> : "—"}</td>
                       <td className="mono">{fmt(f.qty)}</td>
-                      <td className="mono">{(() => { const rt = f.role === "target" ? bot.recentRoundtrips.find(r => r.targetOrderId === f.orderId) : null; return rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"; })()}</td></tr>
+                      <td className="mono">{rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"}</td></tr>
                   );
                 })}</tbody>
               </table>
@@ -183,16 +186,3 @@ function OrderTable({ orders, empty, targets = false }: { orders: OrderView[]; e
   );
 }
 
-/**
- * Closed target price for a fill row, or null (shown as "—").
- * - Target fills: the price that target closed at.
- * - Entry fills: the level price ± target spread, only once its target has filled;
- *   while the target is still resting nothing is shown.
- */
-function fillTarget(f: FillView, bot: BotView): { price: number; waiting: boolean } | null {
-  if (f.role === "target") return { price: Number(f.price), waiting: false };
-  if (bot.openTargets.some(t => t.parentOrderId === f.orderId)) return null;
-  const c = bot.config;
-  const level = Number(c.entryPrice) + f.level * Number(c.spread);
-  return { price: f.side === "buy" ? level + Number(c.targetSpread) : level - Number(c.targetSpread), waiting: false };
-}

@@ -512,7 +512,7 @@ export class GridBot {
       openEntries: open.filter(o => o.role === "entry").map(orderView),
       openTargets: targets.map(orderView),
       recentRoundtrips: this.recentRoundtrips.map(r => ({
-        targetOrderId: r.targetOrderId, level: r.level, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
+        entryOrderId: r.entryOrderId, targetOrderId: r.targetOrderId, level: r.level, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
       })),
       recentFills: this.recentFills.slice(0, 25).map(f => ({
         id: f.id, orderId: f.orderId, level: f.level, role: f.role, side: f.side, price: f.price, qty: f.qty, fee: f.fee, time: f.time,

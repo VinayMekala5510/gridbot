@@ -83,6 +83,8 @@ export interface FillView {
 }
 
 export interface RoundtripView {
+  /** Entry order that opened this roundtrip. */
+  entryOrderId: number;
   targetOrderId: number;
   level: number;
   entryPrice: string;
