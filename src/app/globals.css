@@ -373,3 +373,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .target-price { font-weight: 600; }
 .target-price span { font-size: 10px; font-weight: 700; margin-right: 4px; }
+.target-state { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
+.target-state.open { color: var(--accent-2); background: rgba(79, 140, 255, .14); }
+.target-state.closed { color: var(--buy); background: rgba(34, 197, 139, .14); }

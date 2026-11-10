@@ -124,7 +124,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
                   return (
                     <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
                       <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td>
-                      <td className="mono target-price">{t ? <>{fmt(t.price)} <small className="muted">{t.waiting ? "waiting" : "closed"}</small></> : "—"}</td>
+                      <td className="mono target-price">{t ? <>{fmt(t.price)} <small className={`target-state ${t.waiting ? "open" : "closed"}`}>{t.waiting ? "Open" : "Closed"}</small></> : "—"}</td>
                       <td className="mono">{fmt(f.qty)}</td>
                       <td className="mono">{(() => { const rt = f.role === "target" ? bot.recentRoundtrips.find(r => r.targetOrderId === f.orderId) : null; return rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"; })()}</td></tr>
                   );
