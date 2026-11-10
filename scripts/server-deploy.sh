@@ -4,6 +4,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Refuse to start when the disk is nearly full: a half-finished npm ci removes node_modules.
+free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
+if [ "$free_mb" -lt 700 ]; then
+  npm cache clean --force > /dev/null 2>&1 || true
+  sudo apt-get clean > /dev/null 2>&1 || true
+  free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
+fi
+if [ "$free_mb" -lt 500 ]; then
+  echo "✗ Only ${free_mb} MB free on the server disk — not deploying (the running bot is untouched)."
+  df -h /
+  exit 1
+fi
+
 # First deploy: create the encryption key for saved exchange accounts.
 touch .env && chmod 600 .env
 if ! grep -q '^MASTER_KEY=[0-9a-f]\{64\}$' .env; then
@@ -20,6 +33,10 @@ npm ci --no-audit --no-fund --loglevel=error
 echo "→ Building dashboard"
 NEXT_TELEMETRY_DISABLED=1 NODE_OPTIONS=--max-old-space-size=900 npx next build > /tmp/gridbot-build.log 2>&1 \
   || { tail -40 /tmp/gridbot-build.log; exit 1; }
+
+# Small disk: drop caches that are only needed during install/build.
+npm cache clean --force > /dev/null 2>&1 || true
+rm -rf .next/cache ~/.npm/_logs
 
 echo "→ Restarting (running bots suspend and resume from MySQL)"
 pm2 startOrReload ecosystem.config.cjs --update-env
