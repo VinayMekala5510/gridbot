@@ -53,3 +53,14 @@ test("Binance accounts take an API key and secret", async () => {
     manager.createAccount({ name: "x", exchange: "binance", publicKey: "short", secret }),
     /API key should be/u);
 });
+
+test("a target spread wider than the price range is refused", async () => {
+  const { MemoryStore } = await import("../src/server/store/memory");
+  const { PaperAdapter } = await import("../src/server/exchanges/paper");
+  const Decimal = (await import("decimal.js")).default;
+  const manager = new BotManager(new MemoryStore(), { adapterFactory: () => new PaperAdapter(async () => new Decimal(74.5)) });
+  await assert.rejects(manager.createBot({
+    name: "hype", exchange: "deribit-testnet", mode: "paper", accountId: null, symbol: "HYPE_USDC-PERPETUAL",
+    spread: "0.1", targetSpread: "74", steps: 20, stepQty: "1", mmQty: "10", upperLimit: "76.5", lowerLimit: "72.5", entryPrice: "74.5",
+  }), /Target spread 74 is wider than the whole price range/u);
+});

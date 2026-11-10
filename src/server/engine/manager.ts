@@ -311,7 +311,7 @@ function validateNumbers(c: BotConfig) {
   if (!c.name) throw new UserError("BotName is required");
   if (!c.symbol) throw new UserError("Coin / asset symbol is required");
   const spread = num("Spread", c.spread);
-  num("Target spread", c.targetSpread);
+  const targetSpread = num("Target spread", c.targetSpread);
   const stepQty = num("Per step quantity", c.stepQty);
   const mmQty = num("Market making quantity", c.mmQty);
   const upper = num("Upper limit", c.upperLimit);
@@ -320,5 +320,10 @@ function validateNumbers(c: BotConfig) {
   if (!Number.isInteger(c.steps) || c.steps < 1 || c.steps > 100) throw new UserError("Steps must be a whole number from 1 to 100");
   if (mmQty.lt(stepQty)) throw new UserError("Market making quantity must be at least one per-step quantity");
   if (!lower.lt(entry) || !entry.lt(upper)) throw new UserError("Entry price must be between the lower and upper limits");
-  if (spread.gte(upper.minus(lower))) throw new UserError("Spread is wider than the whole price range");
+  const range = upper.minus(lower);
+  if (spread.gte(range)) throw new UserError("Spread is wider than the whole price range");
+  if (targetSpread.gte(range)) {
+    throw new UserError(`Target spread ${targetSpread.toFixed()} is wider than the whole price range ${lower.toFixed()}–${upper.toFixed()} (${range.toFixed()}). ` +
+      `A sell at ${entry.plus(spread).toFixed()} would get its buy target at ${entry.plus(spread).minus(targetSpread).toFixed()}. Check the Target spread field.`);
+  }
 }
