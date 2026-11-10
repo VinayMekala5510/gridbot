@@ -514,7 +514,7 @@ export class GridBot {
       recentRoundtrips: this.recentRoundtrips.map(r => ({
         entryOrderId: r.entryOrderId, targetOrderId: r.targetOrderId, level: r.level, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
       })),
-      recentFills: this.recentFills.slice(0, 25).map(f => ({
+      recentFills: this.recentFills.slice(0, 50).map(f => ({
         id: f.id, orderId: f.orderId, level: f.level, role: f.role, side: f.side, price: f.price, qty: f.qty, fee: f.fee, time: f.time,
       })),
       fillSummary: {

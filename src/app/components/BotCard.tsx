@@ -116,30 +116,45 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
               <span className="buy">Buys {bot.fillSummary.buyCount} · {fmt(bot.fillSummary.buyQty)} @ avg {fmt(bot.fillSummary.avgBuy)}</span>
               <span className="sell">Sells {bot.fillSummary.sellCount} · {fmt(bot.fillSummary.sellQty)} @ avg {fmt(bot.fillSummary.avgSell)}</span>
             </div>
-            {bot.recentFills.length === 0 ? <p className="empty">No fills yet.</p> : (
-              <table>
-                <thead><tr><th>Time</th><th>Lvl</th><th>Type</th><th>Side</th><th>Price</th><th title="Filled target: the price the target actually filled at. Waiting: the price the open target order is waiting at.">Target</th><th>Qty</th><th title="Roundtrip PnL: only once the target has filled (entry + target pair, before fees)">RTP PnL</th></tr></thead>
-                <tbody>{bot.recentFills.map(f => {
-                  // Completed roundtrip for this row: entry rows by entry order, target rows by target order.
-                  const rt = f.role === "entry"
-                    ? bot.recentRoundtrips.find(r => r.entryOrderId === f.orderId)
-                    : bot.recentRoundtrips.find(r => r.targetOrderId === f.orderId);
-                  const waiting = f.role === "entry" && !rt ? bot.openTargets.find(t => t.parentOrderId === f.orderId) : undefined;
-                  const target = f.role === "target"
-                    ? <>{fmt(f.price)} <small className="target-state closed">filled target</small></>
-                    : rt ? <>{fmt(rt.exitPrice)} <small className="target-state closed">filled target</small></>
-                    : waiting ? <>{fmt(waiting.price)} <small className="target-state open">target waiting for fill</small></>
-                    : "—";
-                  return (
-                    <tr key={f.id}><td className="mono">{clock(f.time)}</td><td>{f.level > 0 ? `+${f.level}` : f.level}</td>
-                      <td>{f.role}</td><td className={f.side}>{f.side.toUpperCase()}</td><td className="mono">{fmt(f.price)}</td>
-                      <td className="mono target-price">{target}</td>
-                      <td className="mono">{fmt(f.qty)}</td>
-                      <td className="mono">{rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"}</td></tr>
-                  );
-                })}</tbody>
-              </table>
-            )}
+            {(() => {
+              // One row per entry order (partial fills merged), shown next to its own target.
+              const entries = new Map<number, { time: number; level: number; side: "buy" | "sell"; qty: number; notional: number }>();
+              for (const f of bot.recentFills) {
+                if (f.role !== "entry") continue;
+                const e = entries.get(f.orderId) ?? { time: 0, level: f.level, side: f.side, qty: 0, notional: 0 };
+                e.time = Math.max(e.time, f.time);
+                e.qty += Number(f.qty);
+                e.notional += Number(f.qty) * Number(f.price);
+                entries.set(f.orderId, e);
+              }
+              const rows = [...entries.entries()].sort((a, b) => b[1].time - a[1].time);
+              if (!rows.length) return <p className="empty">No filled entries yet.</p>;
+              return (
+                <table>
+                  <thead><tr><th>Time</th><th>Lvl</th><th>Entry</th><th>Target</th><th>Target status</th><th>Qty</th>
+                    <th title="Roundtrip PnL: appears only after the target has filled (entry + target pair, before fees)">RTP PnL</th></tr></thead>
+                  <tbody>{rows.map(([orderId, e]) => {
+                    const rt = bot.recentRoundtrips.find(r => r.entryOrderId === orderId);
+                    const open = rt ? undefined : bot.openTargets.find(t => t.parentOrderId === orderId);
+                    const entryPrice = rt ? Number(rt.entryPrice) : e.notional / e.qty;
+                    const targetSide = e.side === "buy" ? "sell" : "buy";
+                    const targetPrice = rt ? rt.exitPrice : open?.price;
+                    return (
+                      <tr key={orderId}>
+                        <td className="mono">{clock(e.time)}</td>
+                        <td>{e.level > 0 ? `+${e.level}` : e.level}</td>
+                        <td className="mono"><span className={e.side}>{e.side.toUpperCase()}</span> {fmt(entryPrice)}</td>
+                        <td className="mono">{targetPrice ? <><span className={targetSide}>{targetSide.toUpperCase()}</span> {fmt(targetPrice)}</> : "—"}</td>
+                        <td>{rt ? <small className="target-state closed">filled target</small>
+                          : open ? <small className="target-state open">target waiting for fill</small> : "—"}</td>
+                        <td className="mono">{fmt(e.qty)}</td>
+                        <td className="mono">{rt ? <b className={pnlClass(rt.pnl)}>{fmtPnl(rt.pnl)}</b> : "—"}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              );
+            })()}
           </>
         )}
         {tab === "activity" && (bot.events.length === 0 ? <p className="empty">No activity yet.</p> : (
