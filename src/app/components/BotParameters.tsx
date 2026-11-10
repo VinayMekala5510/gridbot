@@ -23,23 +23,41 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
   const [symbols, setSymbols] = useState<{ list: string[] | null; loading: boolean; error: string | null }>({ list: null, loading: true, error: null });
   const info = exchangeInfo(form.exchange);
 
-  // Load the exchange's symbol list whenever the exchange changes; keep the symbol if it still exists.
+  const [symbolsTry, setSymbolsTry] = useState(0);
+
+  // Load the exchange's symbol list whenever the exchange changes (or Retry is pressed).
+  // A copy of the last good list per exchange is kept in this browser so the dropdown
+  // still works when a request is blocked; failed loads are retried 3 times.
   useEffect(() => {
     let cancelled = false;
-    setSymbols({ list: null, loading: true, error: null });
-    api<{ symbols: string[] }>(`/api/symbols?exchange=${form.exchange}`)
-      .then(({ symbols: list }) => {
-        if (cancelled) return;
-        setSymbols({ list, loading: false, error: null });
-        setForm(f => (list.includes(f.symbol) ? f : { ...f, symbol: list[0] ?? "" }));
-      })
-      .catch(err => {
-        if (cancelled) return;
-        setSymbols({ list: null, loading: false, error: (err as Error).message });
-        notify("error", `${(err as Error).message} You can type the symbol instead.`);
-      });
+    const cacheKey = `gridbot.symbols.${form.exchange}`;
+    let cached: string[] | null = null;
+    try { cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null"); } catch { /* storage unavailable */ }
+    const apply = (list: string[]) => setForm(f => (list.includes(f.symbol) ? f : { ...f, symbol: list[0] ?? "" }));
+    setSymbols({ list: cached, loading: !cached, error: null });
+    if (cached) apply(cached);
+
+    (async () => {
+      let lastError = "";
+      for (let attempt = 1; attempt <= 3 && !cancelled; attempt++) {
+        try {
+          const { symbols: list } = await api<{ symbols: string[] }>(`/api/symbols?exchange=${form.exchange}`);
+          if (cancelled) return;
+          try { localStorage.setItem(cacheKey, JSON.stringify(list)); } catch { /* ignore */ }
+          setSymbols({ list, loading: false, error: null });
+          apply(list);
+          return;
+        } catch (err) {
+          lastError = (err as Error).message;
+          await new Promise(r => setTimeout(r, 800 * attempt));
+        }
+      }
+      if (cancelled) return;
+      setSymbols(s => ({ list: s.list, loading: false, error: lastError }));
+      if (!cached) notify("error", `Could not load ${exchangeInfo(form.exchange).label} symbols: ${lastError}`);
+    })();
     return () => { cancelled = true; };
-  }, [form.exchange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [form.exchange, symbolsTry]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [key]: e.target.value }));
 
@@ -151,6 +169,13 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
               <button type="button" className="btn ghost" onClick={useMarket} disabled={busy}>Use market</button>
             </div>
           </Field>
+          {symbols.error && (
+            <p className="hint warn symbol-error">
+              {symbols.list ? "Showing the last saved list — the latest list could not be loaded. " : "The symbol list could not be loaded, so you can type the symbol. "}
+              <button type="button" className="link-btn inline-link" onClick={() => setSymbolsTry(n => n + 1)}>Retry</button>
+              <span className="muted"> ({symbols.error})</span>
+            </p>
+          )}
           <Num label="Spread" info="Price distance from the entry price to each next grid level." value={form.spread} onChange={set("spread")} />
           <Num label="Target spread" info="Profit distance: a filled sell gets a buy target this much lower; a filled buy gets a sell target this much higher." value={form.targetSpread} onChange={set("targetSpread")} />
           <div className="row2">
