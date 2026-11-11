@@ -61,7 +61,7 @@ entry price, so it is reported in USD.
 - Exchange secrets are encrypted with AES-256-GCM (`MASTER_KEY` in the server `.env`)
   and never returned to the browser. Back up `MASTER_KEY`; without it saved accounts
   cannot be decrypted.
-- The server listens on `127.0.0.1` only and has no login. Open it through an SSH
+- The app listens on `127.0.0.1`; nginx serves it at https://15.252.130.220 behind a
   login (set with `node scripts/set-login.mjs` on the server).
 - HTTPS uses a trusted Let's Encrypt certificate for the IP address (6-day "shortlived"
   certificates, renewed automatically by `/etc/cron.d/gridbot-acme`; set up with
