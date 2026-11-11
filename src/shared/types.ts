@@ -87,6 +87,7 @@ export interface RoundtripView {
   entryOrderId: number;
   targetOrderId: number;
   level: number;
+  entrySide: Side;
   entryPrice: string;
   exitPrice: string;
   qty: string;

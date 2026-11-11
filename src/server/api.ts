@@ -136,6 +136,10 @@ export async function handleApi(manager: BotManager, req: IncomingMessage, res: 
       return send(res, 201, { id }), true;
     }
 
+    if (method === "GET" && (m = path.match(/^\/api\/bots\/(\d+)\/roundtrips$/u))) {
+      return send(res, 200, { roundtrips: await manager.roundtrips(Number(m[1])) }), true;
+    }
+
     if (method === "POST" && (m = path.match(/^\/api\/bots\/(\d+)\/stop$/u))) {
       await manager.stopBot(Number(m[1]));
       return send(res, 200, { ok: true }), true;

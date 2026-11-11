@@ -11,6 +11,8 @@ const ZERO = new D(0);
 /** Entry orders resting at once per side: 3 buys + 3 sells, so at most 6 per bot. */
 export const MAX_OPEN_PER_SIDE = 3;
 
+const STOPPED: BotStatus[] = ["killed", "halted_volume_cap", "halted_limit_breach", "error"];
+
 export interface GridBotOptions {
   tickMs?: number;
   /** Consecutive order-placement failures before the bot halts with an error. */
@@ -447,7 +449,7 @@ export class GridBot {
 
   /** Cancels every open order, records last-moment fills and sets the final status. */
   private async finish(status: BotStatus, reason: string) {
-    if (["killed", "halted_volume_cap", "halted_limit_breach", "error"].includes(this.rec.status)) return;
+    if (STOPPED.includes(this.rec.status)) return;
     const open = [...this.orders.values()];
     const live = open.filter(o => o.exchangeOrderId);
     let failed: { exchangeOrderId: string; error: string }[] = [];
@@ -462,6 +464,7 @@ export class GridBot {
       ids = failed.map(f => f.exchangeOrderId);
       if (ids.length) await new Promise(r => setTimeout(r, 500 * attempt));
     }
+    for (const f of failed) this.event("error", `Cancel failed for exchange order ${f.exchangeOrderId}: ${f.error}. Retrying in the background.`);
     // Live venues: fills that landed before the cancel took effect still count.
     // (Paper cancels are instant, so there is nothing to catch up on.)
     if (this.adapter.live) {
@@ -483,6 +486,50 @@ export class GridBot {
       status, statusReason: this.rec.statusReason, stoppedAt: this.rec.stoppedAt, lastPrice: this.rec.lastPrice,
     });
     this.event(stillOpen.size || status === "error" ? "error" : "warn", this.rec.statusReason);
+  }
+
+  /** True when the bot has stopped but some of its orders are still open on the exchange. */
+  get hasLeftovers(): boolean {
+    return STOPPED.includes(this.rec.status) && this.orders.size > 0;
+  }
+
+  /**
+   * After a stop, retries cancelling orders that the exchange did not confirm as
+   * canceled (e.g. rate limits). Records any fills first; returns how many remain.
+   */
+  cleanupLeftovers(): Promise<number> {
+    return this.serial(async () => {
+      if (!this.hasLeftovers) return 0;
+      await this.reconcilePending();
+      const open = [...this.orders.values()].filter(o => o.exchangeOrderId);
+      if (!open.length) return this.orders.size;
+      let canceled: Set<string>;
+      try {
+        const res = await this.adapter.cancel(this.symbol, open.map(o => o.exchangeOrderId!));
+        canceled = new Set(res.canceled);
+        for (const f of res.failed) this.warn(`Still cannot cancel exchange order ${f.exchangeOrderId}: ${f.error}`);
+      } catch (err) {
+        this.warn(`Leftover cancel failed: ${message(err)}`);
+        return this.orders.size;
+      }
+      if (this.adapter.live) {
+        try { await this.syncFills(false, open); } catch (err) { this.warn(`Fill check failed: ${message(err)}`); }
+      }
+      let n = 0;
+      for (const order of open) {
+        if (order.status !== "open" || !canceled.has(order.exchangeOrderId!)) continue;
+        order.status = "canceled";
+        this.orders.delete(order.id);
+        await this.store.updateOrder(order.id, { status: "canceled" });
+        n++;
+      }
+      if (n) this.info(`Canceled ${n} leftover order(s) on the exchange after the stop`);
+      if (!this.orders.size && this.rec.statusReason?.includes("WARNING")) {
+        this.rec.statusReason = `${this.rec.statusReason.split(" WARNING:")[0]} (leftover orders canceled afterwards).`;
+        await this.store.updateBot(this.id, { statusReason: this.rec.statusReason });
+      }
+      return this.orders.size;
+    });
   }
 
   // ── View ─────────────────────────────────────────────────────────────
@@ -512,7 +559,7 @@ export class GridBot {
       openEntries: open.filter(o => o.role === "entry").map(orderView),
       openTargets: targets.map(orderView),
       recentRoundtrips: this.recentRoundtrips.map(r => ({
-        entryOrderId: r.entryOrderId, targetOrderId: r.targetOrderId, level: r.level, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
+        entryOrderId: r.entryOrderId, targetOrderId: r.targetOrderId, level: r.level, entrySide: r.entrySide, entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
       })),
       recentFills: this.recentFills.slice(0, 50).map(f => ({
         id: f.id, orderId: f.orderId, level: f.level, role: f.role, side: f.side, price: f.price, qty: f.qty, fee: f.fee, time: f.time,

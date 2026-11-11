@@ -21,15 +21,16 @@ export function botTag(bot: BotView): string {
 const when = (ms: number) => new Date(ms).toLocaleString("en-US");
 
 /** Compact bot card for the dashboard grid. All details open in the bot's detail view. */
-export function BotTile({ bot, onOpen }: { bot: BotView; onOpen: () => void }) {
+export function BotTile({ bot, onOpen, dimmed = false }: { bot: BotView; onOpen: () => void; dimmed?: boolean }) {
   const c = bot.config;
   const badge = BADGE[bot.status];
   return (
-    <article className={`bot-tile tile-${badge.cls}`}>
+    <article className={`bot-tile tile-${badge.cls}${dimmed ? " dimmed" : ""}`}>
       <header className="tile-head">
         <h3 className="tile-symbol" title={c.symbol}>{c.symbol}</h3>
         <span className={`tile-badge ${badge.cls}`}>{badge.text}</span>
       </header>
+      <div className="tile-date">Created {new Date(bot.createdAt).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}</div>
       <div className="tile-exchange">{exchangeInfo(c.exchange).label.toUpperCase()}</div>
       <div className="tile-account"><span aria-hidden="true">⚿</span> {bot.accountName ? bot.accountName.toUpperCase() : "PAPER TRADING"}</div>
       <div className="tile-tags">
@@ -38,6 +39,13 @@ export function BotTile({ bot, onOpen }: { bot: BotView; onOpen: () => void }) {
         <span className="tile-hash">#{botTag(bot)}</span>
       </div>
       <div className="tile-name" title={c.name}>{c.name}</div>
+      {(() => {
+        const left = bot.openEntries.length + bot.openTargets.length;
+        const stopped = bot.status !== "running" && bot.status !== "idle";
+        return stopped && left > 0
+          ? <div className="tile-warn">⚠ {left} order{left === 1 ? "" : "s"} still open on the exchange — retrying cancel</div>
+          : null;
+      })()}
       <div className="tile-times">
         <div>Started: {when(bot.createdAt)}</div>
         {bot.stoppedAt ? <div>Stopped: {when(bot.stoppedAt)}</div> : <div>Running for {duration(Date.now() - bot.createdAt)}</div>}

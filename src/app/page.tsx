@@ -25,6 +25,7 @@ export default function Dashboard() {
   const [activeAccountId, setActiveAccountId] = useState<number | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
   const [killing, setKilling] = useState(false);
   const [user, setUser] = useState<string | null>(null);
   const [view, setView] = useState<View>("dashboard");
@@ -113,8 +114,13 @@ export default function Dashboard() {
     }
   }
 
-  const bots = (snap?.bots ?? []).filter(b =>
-    filter === "all" ? true : filter === "active" ? b.status === "running" || b.status === "idle" : !(b.status === "running" || b.status === "idle"));
+  // Search: bots whose symbol (or name) matches come first; the rest stay below, dimmed.
+  const q = query.trim().toUpperCase().replace(/[-_/ ]/gu, "");
+  const matches = (b: { config: { symbol: string; name: string } }) =>
+    q !== "" && (b.config.symbol.toUpperCase().replace(/[-_/ ]/gu, "").includes(q) || b.config.name.toUpperCase().includes(query.trim().toUpperCase()));
+  const bots = (snap?.bots ?? [])
+    .filter(b => filter === "all" ? true : filter === "active" ? b.status === "running" || b.status === "idle" : !(b.status === "running" || b.status === "idle"))
+    .sort((a, b) => Number(matches(b)) - Number(matches(a)));
 
   return (
     <div className="app">
@@ -179,6 +185,8 @@ export default function Dashboard() {
 
           <div className="list-head">
             <h2>Bot instances <button className="btn primary small" onClick={() => go("new-bot")}>＋ New bot</button></h2>
+            <input className="bot-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search symbol or bot name…" aria-label="Search bots by symbol or name" />
+            {query.trim() && <span className="muted small">{bots.filter(matches).length} match{bots.filter(matches).length === 1 ? "" : "es"}</span>}
             <div className="seg" role="group" aria-label="Filter bots">
               {(["all", "active", "stopped"] as Filter[]).map(f => (
                 <button key={f} className={filter === f ? "on" : ""} aria-pressed={filter === f} onClick={() => setFilter(f)}>
@@ -196,7 +204,7 @@ export default function Dashboard() {
                   : "No bots match this filter."}
               </div>
             ) : (
-              <div className="tiles">{bots.map(b => <BotTile key={b.id} bot={b} onOpen={() => openBot(b.id)} />)}</div>
+              <div className="tiles">{bots.map(b => <BotTile key={b.id} bot={b} onOpen={() => openBot(b.id)} dimmed={query.trim() !== "" && !matches(b)} />)}</div>
             )}
           </>}
         </main>

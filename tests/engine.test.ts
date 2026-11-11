@@ -195,3 +195,40 @@ test("always refills after a fill even when filled + open exceeds the cap (BTC-T
   assert.deepEqual(sells, ["102", "103", "104"], "next sell level placed");
   assert.equal(bot.rec.status, "running");
 });
+
+test("orders that fail to cancel on stop are retried later until canceled", async () => {
+  const store = new MemoryStore();
+  const adapter = new PaperAdapter(async () => new Decimal(100));
+  let failNext = true;
+  const realCancel = adapter.cancel.bind(adapter);
+  adapter.cancel = async (symbol: string, ids: string[]) => {
+    if (failNext) {
+      failNext = false;
+      return { canceled: ids.slice(1), failed: [{ exchangeOrderId: ids[0], error: "too_many_requests" }] };
+    }
+    return realCancel(symbol, ids);
+  };
+  const rec = await store.createBot({ ...base }, "idle");
+  const bot = new GridBot(rec, store, adapter, { tickMs: 60_000 });
+  await bot.load();
+  await bot.tick();
+  // Every retry inside the stop fails for the first order: make all 3 attempts fail.
+  let attempts = 0;
+  adapter.cancel = async (symbol: string, ids: string[]) => {
+    attempts++;
+    return { canceled: ids.slice(1), failed: [{ exchangeOrderId: ids[0], error: "too_many_requests" }] };
+  };
+  await bot.kill();
+  assert.equal(bot.rec.status, "killed");
+  assert.ok(attempts >= 1);
+  assert.equal(store.orders.filter(o => o.status === "open").length, 1, "one order left open");
+  assert.ok(bot.hasLeftovers);
+  assert.match(bot.rec.statusReason ?? "", /could not be canceled/u);
+
+  adapter.cancel = realCancel;
+  const remaining = await bot.cleanupLeftovers();
+  assert.equal(remaining, 0);
+  assert.equal(store.orders.filter(o => o.status === "open").length, 0);
+  assert.ok(!bot.hasLeftovers);
+  assert.doesNotMatch(bot.rec.statusReason ?? "", /WARNING/u);
+});

@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { exchangeInfo } from "@/shared/exchanges";
-import type { BotStatus, BotView, FillView, OrderView } from "@/shared/types";
+import type { BotStatus, BotView, OrderView, RoundtripView } from "@/shared/types";
 import { api, clock, fmt, fmtPnl, pnlClass, timeAgo } from "../lib/client";
 
 const STATUS_LABEL: Record<BotStatus, string> = {
@@ -13,7 +13,7 @@ const STATUS_LABEL: Record<BotStatus, string> = {
   error: "Halted: Error",
 };
 
-type Tab = "orders" | "targets" | "fills" | "activity";
+type Tab = "orders" | "targets" | "fills" | "roundtrips" | "activity";
 
 export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: number; notify: (kind: "ok" | "error", text: string) => void; onRemoved?: () => void }) {
   const [tab, setTab] = useState<Tab>("orders");
@@ -62,12 +62,27 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
       </div>
       {bot.statusReason && !active && <p className="reason">{bot.statusReason}</p>}
 
-      <dl className="params">
-        <div><dt>Entry</dt><dd>{fmt(c.entryPrice)}</dd></div>
-        <div><dt>Lower – Upper</dt><dd>{fmt(c.lowerLimit)} – {fmt(c.upperLimit)}</dd></div>
-        <div><dt>Spread / Target</dt><dd>{fmt(c.spread)} / {fmt(c.targetSpread)}</dd></div>
-        <div><dt>Levels</dt><dd>{bot.activeLevels} <small>(±{c.steps})</small></dd></div>
-      </dl>
+      <section className="settings">
+        <h4 className="settings-title">Bot parameters</h4>
+        <dl className="params all">
+          <div><dt>Bot name</dt><dd>{c.name}</dd></div>
+          <div><dt>Exchange</dt><dd>{exchangeInfo(c.exchange).label}</dd></div>
+          <div><dt>Symbol</dt><dd>{c.symbol}</dd></div>
+          <div><dt>Mode</dt><dd>{c.mode === "live" ? "Live" : "Paper"}</dd></div>
+          <div><dt>Account</dt><dd>{bot.accountName ?? "—"}</dd></div>
+          <div><dt>Bot entry price</dt><dd>{fmt(c.entryPrice)}</dd></div>
+          <div><dt>Spread</dt><dd>{fmt(c.spread)}</dd></div>
+          <div><dt>Target spread</dt><dd>{fmt(c.targetSpread)}</dd></div>
+          <div><dt>Steps</dt><dd>{c.steps} <small>({bot.activeLevels} levels inside limits)</small></dd></div>
+          <div><dt>Per step qty</dt><dd>{fmt(c.stepQty)}</dd></div>
+          <div><dt>Market making qty</dt><dd>{fmt(c.mmQty)}</dd></div>
+          <div><dt>Upper limit</dt><dd>{fmt(c.upperLimit)}</dd></div>
+          <div><dt>Lower limit</dt><dd>{fmt(c.lowerLimit)}</dd></div>
+          <div><dt>Open at once</dt><dd>3 buy + 3 sell</dd></div>
+          <div><dt>Created</dt><dd>{new Date(bot.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</dd></div>
+          <div><dt>Stopped</dt><dd>{bot.stoppedAt ? new Date(bot.stoppedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div>
+        </dl>
+      </section>
 
       <div className="volume">
         <div className="volume-head">
@@ -102,6 +117,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
           ["orders", `Open orders (${bot.openEntries.length})`],
           ["targets", `Targets (${bot.openTargets.length})`],
           ["fills", "Filled"],
+          ["roundtrips", `Roundtrips (${bot.roundtrips})`],
           ["activity", "Activity"],
         ] as [Tab, string][]).map(([key, label]) => (
           <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>
@@ -157,6 +173,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
             })()}
           </>
         )}
+        {tab === "roundtrips" && <RoundtripTable botId={bot.id} count={bot.roundtrips} inverse={bot.config.exchange.startsWith("deribit") && !bot.config.symbol.includes("_")} />}
         {tab === "activity" && (bot.events.length === 0 ? <p className="empty">No activity yet.</p> : (
           <ol className="events">{bot.events.map((e, i) => (
             <li key={`${e.time}-${i}`} className={e.level}><time className="mono">{clock(e.time)}</time>{e.message}</li>
@@ -207,3 +224,48 @@ function OrderTable({ orders, empty, targets = false }: { orders: OrderView[]; e
   );
 }
 
+
+/** Every completed roundtrip of the bot with its entry fill, target fill and PnL (loaded on demand). */
+function RoundtripTable({ botId, count, inverse }: { botId: number; count: number; inverse: boolean }) {
+  const [rows, setRows] = useState<RoundtripView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api<{ roundtrips: RoundtripView[] }>(`/api/bots/${botId}/roundtrips`)
+      .then(r => { if (!cancelled) { setRows(r.roundtrips); setError(null); } })
+      .catch(err => { if (!cancelled) setError((err as Error).message); });
+    return () => { cancelled = true; };
+  }, [botId, count]);
+  if (error) return <p className="empty">Could not load roundtrips: {error}</p>;
+  if (!rows) return <p className="empty">Loading roundtrips…</p>;
+  if (!rows.length) return <p className="empty">No completed roundtrips yet.</p>;
+  const total = rows.reduce((s, r) => s + Number(r.pnl), 0);
+  return (
+    <>
+      <div className="fill-summary">
+        <span>{rows.length} roundtrip{rows.length === 1 ? "" : "s"}</span>
+        <span>Total RTP PnL <b className={pnlClass(total)}>{fmtPnl(total)}</b></span>
+        {inverse && <span className="muted">PnL = price move × qty ÷ entry price (USD-sized contract)</span>}
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>Completed</th><th>Lvl</th><th>Entry filled</th><th>Target filled</th><th>Move</th><th>Qty</th><th>RTP PnL</th></tr></thead>
+        <tbody>{rows.map((r, i) => {
+          const targetSide = r.entrySide === "buy" ? "sell" : "buy";
+          const move = Math.abs(Number(r.exitPrice) - Number(r.entryPrice));
+          return (
+            <tr key={r.targetOrderId}>
+              <td>{rows.length - i}</td>
+              <td className="mono">{new Date(r.time).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
+              <td>{r.level > 0 ? `+${r.level}` : r.level}</td>
+              <td className="mono"><span className={r.entrySide}>{r.entrySide.toUpperCase()}</span> {fmt(r.entryPrice)}</td>
+              <td className="mono"><span className={targetSide}>{targetSide.toUpperCase()}</span> {fmt(r.exitPrice)}</td>
+              <td className="mono">{fmt(move)}</td>
+              <td className="mono">{fmt(r.qty)}</td>
+              <td className="mono"><b className={pnlClass(r.pnl)}>{fmtPnl(r.pnl)}</b></td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+    </>
+  );
+}

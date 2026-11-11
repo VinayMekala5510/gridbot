@@ -1,6 +1,6 @@
 import Decimal from "decimal.js";
 import { exchangeInfo } from "../../shared/exchanges";
-import type { AccountView, BotConfig, ExchangeId, Snapshot } from "../../shared/types";
+import type { AccountView, BotConfig, ExchangeId, RoundtripView, Snapshot } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
 import { BinanceAccount, BinanceAdapter, validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
@@ -54,10 +54,24 @@ export class BotManager {
         await this.store.updateBot(rec.id, { status: "error", statusReason: `Could not resume after restart: ${message(err)}`, stoppedAt: Date.now() });
       }
     }
+    // Stopped bots whose orders were not all confirmed canceled keep retrying in the background.
+    this.cleanupTimer = setInterval(() => void this.cleanupLeftovers(), 60_000);
+    this.cleanupTimer.unref?.();
+    void this.cleanupLeftovers();
+  }
+
+  private cleanupTimer: NodeJS.Timeout | null = null;
+
+  private async cleanupLeftovers(): Promise<void> {
+    for (const bot of this.bots.values()) {
+      if (!bot.hasLeftovers) continue;
+      try { await bot.cleanupLeftovers(); } catch (err) { console.error(`Leftover cleanup for bot ${bot.id} failed: ${message(err)}`); }
+    }
   }
 
   /** Graceful process shutdown: loops stop, orders stay, bots resume on next start. */
   shutdown(): void {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     for (const bot of this.bots.values()) bot.suspend();
   }
 
@@ -232,6 +246,15 @@ export class BotManager {
     this.bots.set(rec.id, bot);
     bot.start();
     return rec.id;
+  }
+
+  /** Every completed roundtrip of a bot (newest first), straight from storage. */
+  async roundtrips(id: number, limit = 2000): Promise<RoundtripView[]> {
+    if (!this.bots.has(id)) throw new UserError("Bot not found");
+    return (await this.store.recentRoundtrips(id, limit)).map(r => ({
+      entryOrderId: r.entryOrderId, targetOrderId: r.targetOrderId, level: r.level, entrySide: r.entrySide,
+      entryPrice: r.entryPrice, exitPrice: r.exitPrice, qty: r.qty, pnl: r.pnl, time: r.time,
+    }));
   }
 
   async stopBot(id: number): Promise<void> {
