@@ -63,6 +63,10 @@ entry price, so it is reported in USD.
   cannot be decrypted.
 - The server listens on `127.0.0.1` only and has no login. Open it through an SSH
   login (set with `node scripts/set-login.mjs` on the server).
+- HTTPS uses a trusted Let's Encrypt certificate for the IP address (6-day "shortlived"
+  certificates, renewed automatically by `/etc/cron.d/gridbot-acme`; set up with
+  `scripts/setup-tls.sh`). Security software that blocked the old self-signed certificate
+  ("Certificate verification problem", HTTP 499) no longer interferes.
 
 ## Open the dashboard on the server
 
