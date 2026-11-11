@@ -9,6 +9,8 @@ free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
 if [ "$free_mb" -lt 700 ]; then
   npm cache clean --force > /dev/null 2>&1 || true
   sudo apt-get clean > /dev/null 2>&1 || true
+  # Automatic updates keep installing kernels; remove the unused ones (keeps running + newest).
+  sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y -qq > /dev/null 2>&1 || true
   free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
 fi
 if [ "$free_mb" -lt 500 ]; then
