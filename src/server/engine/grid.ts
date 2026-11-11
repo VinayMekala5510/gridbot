@@ -35,10 +35,10 @@ interface Level { k: number; side: Side; price: Dec }
  * fill-order price ∓ targetSpread → (fill) → roundtrip, level re-armed.
  *
  * Safety:
- * - Volume cap: entry fills accumulate for the bot's lifetime. Orders always refill
- *   (3 buy + 3 sell open); once filled volume leaves less than one step of room
- *   under Market Making Qty, the bot halts and cancels all. Fills that land at the
- *   same moment can overshoot by at most the open entries.
+ * - Volume cap (steps in use): only filled entries whose target has not filled yet
+ *   count; a completed roundtrip frees its step. Orders always refill (3 buy + 3 sell);
+ *   once open exposure leaves less than one step of room under Market Making Qty, the
+ *   bot halts and cancels all. Simultaneous fills can overshoot by the open entries.
  * - Price limits: market above upper / below lower → halt and cancel all.
  * - Kill switch: halt and cancel all.
  */
@@ -48,6 +48,8 @@ export class GridBot {
   private seenTrades = new Set<string>();
   private recentFills: FillRecord[] = [];
   private recentRoundtrips: RoundtripRecord[] = [];
+  /** Entries that just filled and whose target is being placed (counted as open exposure). */
+  private awaitingTarget = new Map<number, Dec>();
   private events: EventView[] = [];
   private summary = { buy: { count: 0, qty: ZERO, notional: ZERO }, sell: { count: 0, qty: ZERO, notional: ZERO } };
   private levels: Level[] = [];
@@ -170,8 +172,7 @@ export class GridBot {
     await this.syncFills(true);
     if (this.isStopped || this.isFrozen()) return;
     if (this.capReached()) {
-      await this.halt("halted_volume_cap",
-        `Entry volume ${this.rec.entryFilledQty} reached the Market Making Quantity ceiling ${this.rec.config.mmQty}`);
+      await this.halt("halted_volume_cap", this.capMessage());
       return;
     }
 
@@ -216,11 +217,11 @@ export class GridBot {
 
     for (const order of completed) {
       if (order.role === "target") await this.completeRoundtrip(order);
+      else this.awaitingTarget.set(order.id, new D(order.filledQty));
     }
     if (!react) return;
     if (this.capReached()) {
-      await this.halt("halted_volume_cap",
-        `Entry volume ${this.rec.entryFilledQty} reached the Market Making Quantity ceiling ${this.rec.config.mmQty}`);
+      await this.halt("halted_volume_cap", this.capMessage());
       return;
     }
     for (const order of completed) {
@@ -284,9 +285,27 @@ export class GridBot {
     this.info(`Roundtrip #${this.rec.roundtrips} on L${target.level}: PnL ${pnl.toSignificantDigits(8).toFixed()}`);
   }
 
+  /**
+   * Steps in use: quantity of filled entries whose target has not filled yet. A completed
+   * roundtrip frees its step. Counts partly filled entries, waiting targets (remaining
+   * qty) and entries that just filled and are about to get their target.
+   */
+  openExposure(): Dec {
+    let qty = ZERO;
+    for (const o of this.orders.values()) {
+      qty = o.role === "entry" ? qty.plus(o.filledQty) : qty.plus(new D(o.qty).minus(o.filledQty));
+    }
+    for (const q of this.awaitingTarget.values()) qty = qty.plus(q);
+    return qty;
+  }
+
+  /** All steps in use: less than one step of room left under Market Making Qty. */
   private capReached(): boolean {
-    const room = new D(this.rec.config.mmQty).minus(this.rec.entryFilledQty);
-    return room.lt(this.rec.config.stepQty);
+    return new D(this.rec.config.mmQty).minus(this.openExposure()).lt(this.rec.config.stepQty);
+  }
+
+  private capMessage(): string {
+    return `All steps in use: open exposure ${this.openExposure().toFixed()} (filled entries whose target has not filled) reached the Market Making Quantity ceiling ${this.rec.config.mmQty}`;
   }
 
   // ── Orders ───────────────────────────────────────────────────────────
@@ -371,7 +390,7 @@ export class GridBot {
     // filled entry volume still has room for at least one more step; the bot halts
     // once filled volume reaches Market making qty (simultaneous fills may overshoot
     // by up to the open entries).
-    const room = new D(this.rec.config.mmQty).minus(this.rec.entryFilledQty);
+    const room = new D(this.rec.config.mmQty).minus(this.openExposure());
     const stepQty = await this.adapter.roundQty(this.symbol, new D(this.rec.config.stepQty));
     // Only a window of levels rests at once: at most MAX_OPEN_PER_SIDE buy entries and as
     // many sell entries. When one fills, the next free level on that side is placed.
@@ -390,6 +409,10 @@ export class GridBot {
   }
 
   private async placeTarget(entry: OrderRecord) {
+    try { await this.placeTargetInner(entry); } finally { this.awaitingTarget.delete(entry.id); }
+  }
+
+  private async placeTargetInner(entry: OrderRecord) {
     const side: Side = entry.side === "buy" ? "sell" : "buy";
     const spread = new D(this.rec.config.targetSpread);
     const raw = side === "sell" ? new D(entry.price).plus(spread) : new D(entry.price).minus(spread);
@@ -516,6 +539,7 @@ export class GridBot {
       this.orders.delete(order.id);
       await this.store.updateOrder(order.id, { status: "canceled" });
     }
+    this.awaitingTarget.clear();
     const note = stillOpen.size ? ` WARNING: ${stillOpen.size} order(s) could not be canceled — check the exchange.` : "";
     this.rec.status = status;
     this.rec.statusReason = `${reason}.${note}`.replace(/\.\./gu, ".");
@@ -591,7 +615,7 @@ export class GridBot {
       id: this.id, config: { ...this.rec.config }, accountName: this.accountName,
       status: this.rec.status, statusReason: this.rec.statusReason,
       lastPrice: this.rec.lastPrice, lastPriceAt: this.lastPriceAt,
-      entryFilledQty: this.rec.entryFilledQty, roundtrips: this.rec.roundtrips,
+      entryFilledQty: this.rec.entryFilledQty, openExposure: this.openExposure().toFixed(), roundtrips: this.rec.roundtrips,
       realizedPnl: this.rec.realizedPnl, unrealizedPnl: unrealized.toFixed(), fees: this.rec.fees, netPnl: net.toFixed(),
       activeLevels: this.levels.length,
       openEntries: open.filter(o => o.role === "entry").map(orderView),

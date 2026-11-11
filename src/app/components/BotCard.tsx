@@ -20,7 +20,9 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
   const [busy, setBusy] = useState(false);
   const c = bot.config;
   const active = bot.status === "running" || bot.status === "idle";
-  const used = Number(bot.entryFilledQty) / Number(c.mmQty);
+  const used = Number(bot.openExposure) / Number(c.mmQty);
+  const stepsTotal = Math.floor(Number(c.mmQty) / Number(c.stepQty) + 1e-9);
+  const stepsUsed = Math.round(Number(bot.openExposure) / Number(c.stepQty) * 100) / 100;
   const pct = Math.min(100, Math.max(0, used * 100));
 
   async function stop() {
@@ -86,8 +88,8 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
 
       <div className="volume">
         <div className="volume-head">
-          <span>Accumulated vol / safety threshold</span>
-          <b className="mono">{fmt(bot.entryFilledQty)} / {fmt(c.mmQty)} <small>({pct.toFixed(0)}%)</small></b>
+          <span title="Filled entries whose target has not filled yet. A completed roundtrip frees its step. When all steps are in use the bot stops.">Steps in use (open exposure) / ceiling</span>
+          <b className="mono">{fmt(stepsUsed)} / {stepsTotal} steps · {fmt(bot.openExposure)} / {fmt(c.mmQty)} <small>({pct.toFixed(0)}%)</small></b>
         </div>
         <div className="bar" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
           <div className={`bar-fill ${pct >= 90 ? "hot" : pct >= 60 ? "warm" : ""}`} style={{ width: `${pct}%` }} />

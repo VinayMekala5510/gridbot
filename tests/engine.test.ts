@@ -71,19 +71,40 @@ test("buy entry fill places a sell target above it", async () => {
   assert.equal(bot.rec.realizedPnl, "0.5");
 });
 
-test("volume cap halts the bot and cancels every order once filled volume reaches it", async () => {
+test("bot stops when all steps are in use (filled entries whose targets have not filled)", async () => {
   const { bot, open, setPrice } = await setup({ mmQty: "2" });
   await bot.tick();
   assert.equal(open().length, 6, "orders are not limited by the cap, only by 3 + 3");
   setPrice(101.5);
-  await bot.tick(); // sell +1 fills (1 of 2)
+  await bot.tick(); // sell +1 fills: 1 of 2 steps in use (its buy target at 100.5 waits)
   assert.equal(bot.rec.status, "running");
-  setPrice(98.5);
-  await bot.tick(); // buy -1 fills (2 of 2) → cap reached
+  assert.equal(bot.view().openExposure, "1");
+  setPrice(102.5);
+  await bot.tick(); // sell +2 fills: 2 of 2 steps in use → stop
   assert.equal(bot.rec.status, "halted_volume_cap");
-  assert.equal(bot.rec.entryFilledQty, "2");
+  assert.match(bot.rec.statusReason ?? "", /All steps in use/u);
   assert.equal(open().length, 0, "all orders canceled");
-  assert.ok(new Decimal(bot.rec.entryFilledQty).lte(2));
+});
+
+test("a completed roundtrip frees its step, so the bot keeps running past Steps fills", async () => {
+  const { bot, open, setPrice } = await setup({ mmQty: "1" }); // only 1 step may be in use
+  await bot.tick();
+  setPrice(101.2);
+  await bot.tick(); // sell +1 fills: 1 of 1 step in use → would stop only if another entry fills
+  // The cap is full, so it stops immediately (all steps in use).
+  assert.equal(bot.rec.status, "halted_volume_cap");
+
+  const second = await setup({ mmQty: "2" });
+  await second.bot.tick();
+  for (const p of [101.2, 100.4, 101.2, 100.4, 101.2, 100.4]) { // three roundtrips on level +1
+    second.setPrice(p);
+    await second.bot.tick();
+  }
+  assert.equal(second.bot.rec.roundtrips, 3);
+  assert.equal(second.bot.rec.entryFilledQty, "3", "3 entries filled in total — more than the 2-step cap");
+  assert.equal(second.bot.rec.status, "running", "completed roundtrips do not use up steps");
+  assert.equal(second.bot.view().openExposure, "0");
+  assert.ok(open().length >= 0);
 });
 
 test("price outside the limits stops the bot completely", async () => {

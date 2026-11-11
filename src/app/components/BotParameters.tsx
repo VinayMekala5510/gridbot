@@ -191,7 +191,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
         </Card>
 
         <Card title="Risk / Limits" icon="⛨">
-          <Num label="Market making qty" info="Ceiling on total filled entry quantity. Orders keep refilling (3 buy + 3 sell); once filled volume reaches this, the bot stops and cancels all its orders. Fills at the same moment can go over by up to the open orders." value={form.mmQty} onChange={set("mmQty")} />
+          <Num label="Market making qty" info="Ceiling on steps in use: filled entries whose target has not filled yet. A completed roundtrip frees its step. When open exposure reaches this, the bot stops and cancels all its orders." value={form.mmQty} onChange={set("mmQty")} />
           <div className="row2">
             <Num label="Upper limit" info="If the market price rises above this, the bot stops completely." value={form.upperLimit} onChange={set("upperLimit")} />
             <Num label="Lower limit" info="If the market price falls below this, the bot stops completely." value={form.lowerLimit} onChange={set("lowerLimit")} />
@@ -204,7 +204,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
             <div><dt>Grid levels</dt><dd>{Number.isFinite(steps) ? `${steps} buy + ${steps} sell` : "—"}</dd></div>
             <div><dt>Grid range</dt><dd>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(steps)
               ? `${fmt(entry - steps * spread)} – ${fmt(entry + steps * spread)}` : "—"}</dd></div>
-            <div><dt>Max entry fills</dt><dd>{Number.isFinite(maxEntries) ? maxEntries : "—"}</dd></div>
+            <div><dt>Steps that can be in use</dt><dd>{Number.isFinite(maxEntries) ? maxEntries : "—"}</dd></div>
             <div><dt>Open at once</dt><dd>{Number.isFinite(steps) ? `${Math.min(3, steps)} buy + ${Math.min(3, steps)} sell` : "—"}</dd></div>
             <div><dt>Sell entry → target</dt><dd className={targetTooWide ? "neg" : ""}>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(targetSpread) ? `SELL ${r(entry + spread)} → BUY ${r(entry + spread - targetSpread)}` : "—"}</dd></div>
             <div><dt>Buy entry → target</dt><dd className={targetTooWide ? "neg" : ""}>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(targetSpread) ? `BUY ${r(entry - spread)} → SELL ${r(entry - spread + targetSpread)}` : "—"}</dd></div>

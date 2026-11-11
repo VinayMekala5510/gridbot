@@ -18,11 +18,11 @@ they are strictly inside the lower/upper limits.
 - **Order style:** resting GTC limit orders, nearest levels to the market first. Only
   **3 buy and 3 sell entry orders** rest at a time (6 per bot); when one fills, the next
   free level on that side is placed. Target orders are extra and not part of the 3 + 3.
-- **Volume cap (Market Making Quantity):** every filled entry quantity counts for the
-  bot's lifetime (target fills do not reduce it). Orders always refill (3 buy + 3 sell
-  stay open); when filled volume leaves less than one step of room, the bot halts and
-  cancels all its orders, targets included. Fills that land at the same moment can go
-  over the cap by at most the open entries.
+- **Volume cap (Market Making Quantity) = steps in use:** only filled entries whose
+  target has **not filled yet** count. A completed roundtrip (entry + target filled) frees
+  its step again. Orders always refill (3 buy + 3 sell stay open); when the open exposure
+  leaves less than one step of room, the bot halts and cancels all its orders, targets
+  included. Fills that land at the same moment can go over the cap by the open entries.
 - **Price limits:** market price above the upper or below the lower limit → the bot
   stops completely and cancels all its orders.
 - **Instance kill switch:** cancels that bot's orders and marks it `KILLED`.

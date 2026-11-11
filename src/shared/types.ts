@@ -120,6 +120,8 @@ export interface BotView {
   lastPrice: string | null;
   lastPriceAt: number | null;
   entryFilledQty: string;
+  /** Steps in use: filled entry quantity whose target has not filled yet (counts toward Market making qty). */
+  openExposure: string;
   roundtrips: number;
   realizedPnl: string;
   unrealizedPnl: string;
