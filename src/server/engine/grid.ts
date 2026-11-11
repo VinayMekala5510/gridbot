@@ -60,6 +60,7 @@ export class GridBot {
   private lastWarn = "";
   private lastPriceAt: number | null = null;
   private lastPersistedPrice = 0;
+  private lastReconcile = 0;
   private readonly tickMs: number;
   private readonly maxPlaceErrors: number;
   private readonly maxOpenPerSide: number;
@@ -179,6 +180,8 @@ export class GridBot {
       await this.store.updateBot(this.id, { status: "running" });
       this.info(`Running. ${this.levels.length} grid levels inside the limits.`);
     }
+    await this.reconcileWithExchange();
+    if (this.isStopped || this.isFrozen()) return;
     await this.trimEntries(price);
     if (this.isStopped || this.isFrozen()) return;
     await this.placeEntries(price);
@@ -287,6 +290,41 @@ export class GridBot {
   }
 
   // ── Orders ───────────────────────────────────────────────────────────
+
+  /**
+   * Every 30 s on live venues: orders we think are open but the exchange no longer lists
+   * were closed by the exchange (e.g. the rest of a partly filled order was canceled).
+   * Fills are recorded first; a partly filled entry gets its target for the filled amount;
+   * the level is then free again.
+   */
+  private async reconcileWithExchange() {
+    if (!this.adapter.live || !this.adapter.openOrderIds || Date.now() - this.lastReconcile < 30_000) return;
+    this.lastReconcile = Date.now();
+    const suspects = () => [...this.orders.values()]
+      .filter(o => o.status === "open" && o.exchangeOrderId && Date.now() - o.createdAt > 20_000);
+    if (!suspects().length) return;
+    let resting: Set<string>;
+    try { resting = await this.adapter.openOrderIds(this.symbol); } catch (err) {
+      this.warn(`Could not check open orders on the exchange: ${message(err)}`);
+      return;
+    }
+    if (!suspects().some(o => !resting.has(o.exchangeOrderId!))) return;
+    await this.syncFills(true); // the order may simply have filled
+    if (this.isStopped) return;
+    for (const order of suspects()) {
+      if (resting.has(order.exchangeOrderId!)) continue;
+      const filled = new D(order.filledQty);
+      order.status = "canceled";
+      order.error = "Closed by the exchange";
+      this.orders.delete(order.id);
+      await this.store.updateOrder(order.id, { status: "canceled", error: order.error });
+      this.event("warn", `${order.role} ${order.side} L${order.level} @ ${order.price} was closed by the exchange` +
+        (filled.gt(0) ? ` after filling ${filled.toFixed()} of ${order.qty}` : "") + ".");
+      if (order.role === "entry" && filled.gt(0) && !this.isStopped && !this.isFrozen()) {
+        await this.placeTarget(order); // target for the part that did fill
+      }
+    }
+  }
 
   /**
    * Cancels entry orders beyond the per-side window (e.g. bots started before the

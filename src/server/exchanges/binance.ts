@@ -238,6 +238,12 @@ export class BinanceAdapter implements ExchangeAdapter {
     return { exchangeOrderId: String(res.orderId) };
   }
 
+  async openOrderIds(symbol: string): Promise<Set<string>> {
+    const r = await symbolRules(symbol);
+    const open = await this.account.signed("GET", "/api/v3/openOrders", { symbol: r.symbol }) as { orderId: number }[];
+    return new Set(open.map(o => String(o.orderId)));
+  }
+
   async lookupByClientId(symbol: string, clientId: string) {
     const r = await symbolRules(symbol);
     try {

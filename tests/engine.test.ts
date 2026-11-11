@@ -232,3 +232,39 @@ test("orders that fail to cancel on stop are retried later until canceled", asyn
   assert.ok(!bot.hasLeftovers);
   assert.doesNotMatch(bot.rec.statusReason ?? "", /WARNING/u);
 });
+
+test("an entry the exchange closed after a partial fill gets a target for the filled part", async () => {
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const adapter = new PaperAdapter(async () => price);
+  Object.defineProperty(adapter, "live", { value: true });
+  let closedId: string | null = null;
+  let partial: { id: string; qty: Decimal } | null = null;
+  // Fills: only the partial fill we inject; paper crossing is switched off.
+  adapter.fillsFor = async (_s, _open, since) => ({
+    fills: partial ? [{ exchangeOrderId: partial.id, tradeId: "t-partial", price: new Decimal(101), qty: partial.qty, fee: new Decimal(0), time: Date.now() }] : [],
+    cursor: since,
+  });
+  Object.assign(adapter, {
+    openOrderIds: async () => new Set(store.orders.filter(o => o.status === "open" && o.exchangeOrderId !== closedId).map(o => o.exchangeOrderId!)),
+  });
+  const rec = await store.createBot({ ...base, mmQty: "10" }, "idle");
+  const bot = new GridBot(rec, store, adapter, { tickMs: 60_000 });
+  await bot.load();
+  await bot.tick();
+  const sell1 = store.orders.find(o => o.level === 1 && o.role === "entry")!;
+  closedId = sell1.exchangeOrderId;
+  partial = { id: sell1.exchangeOrderId!, qty: new Decimal("0.4") };
+
+  const realNow = Date.now;
+  Date.now = () => realNow() + 60_000; // orders are now old enough to be checked
+  try { await bot.tick(); } finally { Date.now = realNow; }
+
+  const after = store.orders.find(o => o.id === sell1.id)!;
+  assert.equal(after.status, "canceled");
+  assert.equal(after.error, "Closed by the exchange");
+  const target = store.orders.find(o => o.role === "target" && o.level === 1);
+  assert.equal(target?.side, "buy");
+  assert.equal(target?.qty, "0.4");
+  assert.equal(target?.price, "100.5");
+});

@@ -233,6 +233,12 @@ export class DeribitAdapter implements ExchangeAdapter {
     return history.find(o => o.label === clientId)?.order_id ?? null;
   }
 
+  async openOrderIds(symbol: string): Promise<Set<string>> {
+    const inst = await this.info(symbol);
+    const open = await this.account.private("get_open_orders_by_instrument", { instrument_name: inst.name }) as { order_id: string }[];
+    return new Set(open.map(o => o.order_id));
+  }
+
   async cancel(_symbol: string, ids: string[]): Promise<CancelResult> {
     const result: CancelResult = { canceled: [], failed: [] };
     for (const id of ids) {
@@ -240,8 +246,11 @@ export class DeribitAdapter implements ExchangeAdapter {
         await this.account.private("cancel", { order_id: id });
         result.canceled.push(id);
       } catch (err) {
-        // 11044 not_open_order: already filled or canceled — no longer resting either way.
-        if (err instanceof DeribitError && err.code === 11044) result.canceled.push(id);
+        // 11044 not_open_order / 10004 order_not_found: already filled, canceled or expired —
+        // no longer resting either way (fills are reconciled separately).
+        if (err instanceof DeribitError && (err.code === 11044 || err.code === 10004 || /order_not_found|not_open_order/u.test(err.message))) {
+          result.canceled.push(id);
+        }
         else result.failed.push({ exchangeOrderId: id, error: err instanceof Error ? err.message : String(err) });
       }
     }

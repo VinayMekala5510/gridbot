@@ -232,6 +232,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     return { exchangeOrderId: String(oid) };
   }
 
+  async openOrderIds(symbol: string): Promise<Set<string>> {
+    const { coin } = await this.account.asset(symbol);
+    const open = await this.account.info({ type: "openOrders", user: this.account.user }) as { coin: string; oid: number }[];
+    return new Set(open.filter(o => o.coin === coin).map(o => String(o.oid)));
+  }
+
   async lookupByClientId(_symbol: string, clientId: string): Promise<string | null> {
     const res = await this.account.info({ type: "orderStatus", user: this.account.user, oid: clientId }) as
       { status?: string; order?: { order?: { oid?: number } } };
