@@ -304,6 +304,10 @@ export class BotManager {
       serverTime: Date.now(), storage: this.store.kind, frozen: this.frozen,
       totals: {
         netPnl: bots.reduce((s, b) => s.plus(b.netPnl), new Decimal(0)).toFixed(),
+        rtpPnl: sum(bots.map(b => b.realizedPnl)),
+        realizedPnl: sum(bots.map(b => b.realizedPnl)),
+        unrealizedPnl: sum(bots.map(b => b.unrealizedPnl)),
+        fees: sum(bots.map(b => b.fees)),
         runningBots: bots.filter(b => b.status === "running" || b.status === "idle").length,
         totalBots: bots.length,
         roundtrips: bots.reduce((s, b) => s + b.roundtrips, 0),
@@ -349,4 +353,8 @@ function validateNumbers(c: BotConfig) {
     throw new UserError(`Target spread ${targetSpread.toFixed()} is wider than the whole price range ${lower.toFixed()}–${upper.toFixed()} (${range.toFixed()}). ` +
       `A sell at ${entry.plus(spread).toFixed()} would get its buy target at ${entry.plus(spread).minus(targetSpread).toFixed()}. Check the Target spread field.`);
   }
+}
+
+function sum(values: string[]): string {
+  return values.reduce((s, v) => s.plus(v), new Decimal(0)).toFixed();
 }

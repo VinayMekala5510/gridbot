@@ -174,7 +174,13 @@ export default function Dashboard() {
           )}
           {view === "dashboard" && detailId === null && <>
           <section className="overview">
-            <div className="stat"><span>Total combined PnL</span><b className={`mono ${pnlClass(snap?.totals.netPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.netPnl) : "—"}</b><small>realized + unrealized − fees</small></div>
+            <div className="stat"><span>Total combined PnL</span><b className={`mono ${pnlClass(snap?.totals.rtpPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.rtpPnl) : "—"}</b><small>completed roundtrips (RTP) only, all bots</small></div>
+            <div className="stat pnl-split"><span>Realized / Unrealized</span>
+              <div className="pnl-pair">
+                <div><small>Realized</small><b className={`mono ${pnlClass(snap?.totals.realizedPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.realizedPnl) : "—"}</b></div>
+                <div><small>Unrealized</small><b className={`mono ${pnlClass(snap?.totals.unrealizedPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.unrealizedPnl) : "—"}</b></div>
+              </div>
+              <small>fees {snap ? fmtPnl(-Number(snap.totals.fees)) : "—"} · net {snap ? fmtPnl(snap.totals.netPnl) : "—"}</small></div>
             <div className="stat"><span>Running bots</span><b className="mono">{snap ? snap.totals.runningBots : "—"}</b><small>of {snap?.totals.totalBots ?? 0} on dashboard</small></div>
             <div className="stat"><span>Completed roundtrips</span><b className="mono">{snap ? snap.totals.roundtrips : "—"}</b><small>entry + target both filled</small></div>
             <button className="kill-all" onClick={killAll} disabled={killing || !snap}>

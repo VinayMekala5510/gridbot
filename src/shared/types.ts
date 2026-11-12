@@ -155,6 +155,11 @@ export interface Snapshot {
   frozen: boolean;
   totals: {
     netPnl: string;
+    /** Sum of completed roundtrip PnL across bots (before fees). */
+    rtpPnl: string;
+    realizedPnl: string;
+    unrealizedPnl: string;
+    fees: string;
     runningBots: number;
     totalBots: number;
     roundtrips: number;
