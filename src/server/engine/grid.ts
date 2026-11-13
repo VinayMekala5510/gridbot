@@ -346,19 +346,41 @@ export class GridBot {
   }
 
   /**
-   * Cancels entry orders beyond the per-side window (e.g. bots started before the
-   * 3 + 3 rule), keeping the ones nearest the market. Partly filled orders are kept.
+   * Keeps each side's entry window on the levels nearest the market:
+   * - cancels entries beyond the per-side limit (e.g. bots started before the 3 + 3 rule);
+   * - swaps: when a FREE level (no open entry and no waiting target, i.e. its roundtrip is
+   *   complete or it was never used) is closer to the price than the farthest open entry
+   *   by at least half a spread, the farthest entry is canceled so the free level can be
+   *   placed by placeEntries. A level whose target is still waiting is never re-placed.
+   * Partly filled entries are never canceled.
    */
   private async trimEntries(price: Dec) {
+    const dist = (p: string | Dec) => new D(p).minus(price).abs();
+    const busy = new Set([...this.orders.values()].map(o => o.level));
+    const halfSpread = new D(this.rec.config.spread).div(2);
+    const canRefill = new D(this.rec.config.mmQty).minus(this.openExposure()).gte(this.rec.config.stepQty);
     const excess: OrderRecord[] = [];
+    let swaps = 0;
     for (const side of ["buy", "sell"] as const) {
       const entries = [...this.orders.values()]
         .filter(o => o.role === "entry" && o.side === side && o.status === "open" && o.exchangeOrderId)
-        .sort((a, b) => new D(a.price).minus(price).abs().cmp(new D(b.price).minus(price).abs()));
+        .sort((a, b) => dist(a.price).cmp(dist(b.price)));
       const pending = [...this.orders.values()].filter(o => o.role === "entry" && o.side === side && o.status === "pending").length;
       const extra = entries.length + pending - this.maxOpenPerSide;
-      if (extra <= 0) continue;
-      excess.push(...entries.slice(-extra).filter(o => new D(o.filledQty).isZero()));
+      if (extra > 0) {
+        excess.push(...entries.slice(-extra).filter(o => new D(o.filledQty).isZero()));
+        continue;
+      }
+      if (!canRefill || entries.length + pending < this.maxOpenPerSide) continue; // a free slot will be filled anyway
+      const free = this.levels.filter(l => l.side === side && !busy.has(l.k)).sort((a, b) => dist(a.price).cmp(dist(b.price)));
+      const kept = entries.filter(o => new D(o.filledQty).isZero()); // partly filled entries always stay
+      for (const level of free) {
+        const farthest = kept[kept.length - 1];
+        if (!farthest || !dist(level.price).plus(halfSpread).lt(dist(farthest.price))) break;
+        excess.push(farthest);
+        kept.pop();
+        swaps++;
+      }
     }
     if (!excess.length) return;
 
@@ -381,7 +403,9 @@ export class GridBot {
       await this.store.updateOrder(order.id, { status: "canceled" });
       n++;
     }
-    if (n) this.info(`Canceled ${n} extra entry order(s) to keep ${this.maxOpenPerSide} buy + ${this.maxOpenPerSide} sell open`);
+    if (n) this.info(swaps
+      ? `Moved ${n} entry order(s) closer to the market (free levels nearer the price than the farthest open order)`
+      : `Canceled ${n} extra entry order(s) to keep ${this.maxOpenPerSide} buy + ${this.maxOpenPerSide} sell open`);
   }
 
   private async placeEntries(price: Dec) {

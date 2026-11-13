@@ -18,6 +18,11 @@ they are strictly inside the lower/upper limits.
 - **Order style:** resting GTC limit orders, nearest levels to the market first. Only
   **3 buy and 3 sell entry orders** rest at a time (6 per bot); when one fills, the next
   free level on that side is placed. Target orders are extra and not part of the 3 + 3.
+  A level is free only when it has no open entry and no waiting target (its roundtrip is
+  complete), so a level is never re-entered while its target waits. The window follows
+  the market: if a free level is closer to the price than the farthest open entry on that
+  side (by at least half a spread), the farthest entry is canceled and the closer level is
+  placed. Partly filled entries are never canceled.
 - **Volume cap (Market Making Quantity) = steps in use:** only filled entries whose
   target has **not filled yet** count. A completed roundtrip (entry + target filled) frees
   its step again. Orders always refill (3 buy + 3 sell stay open); when the open exposure

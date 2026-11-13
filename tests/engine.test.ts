@@ -289,3 +289,32 @@ test("an entry the exchange closed after a partial fill gets a target for the fi
   assert.equal(target?.qty, "0.4");
   assert.equal(target?.price, "100.5");
 });
+
+test("100 → 103 → 100: once the 3 targets fill, sells move back to 101, 102, 103", async () => {
+  const { bot, open, setPrice } = await setup({ steps: 8, mmQty: "100", upperLimit: "120", lowerLimit: "80" });
+  const sells = () => open().filter(o => o.role === "entry" && o.side === "sell").map(o => o.price).sort();
+  await bot.tick();
+  assert.deepEqual(sells(), ["101", "102", "103"]);
+
+  setPrice(101.2); await bot.tick(); // 101 fills → target buy 100.5
+  assert.deepEqual(sells(), ["102", "103", "104"], "101 is NOT re-placed while its target waits (no loop)");
+  setPrice(102.2); await bot.tick();
+  setPrice(103.2); await bot.tick();
+  assert.deepEqual(sells(), ["104", "105", "106"]);
+  assert.equal(open().filter(o => o.role === "target").length, 3);
+
+  setPrice(100.4); await bot.tick(); // all 3 targets fill → 101–103 free → farthest sells swapped
+  assert.equal(bot.rec.roundtrips, 3);
+  assert.deepEqual(sells(), ["101", "102", "103"], "window follows the market again");
+  assert.equal(open().filter(o => o.role === "entry").length, 6, "still only 3 buy + 3 sell");
+});
+
+test("a level whose target is still waiting is never re-placed, even when it is nearest", async () => {
+  const { bot, open, setPrice } = await setup({ steps: 8, mmQty: "100", upperLimit: "120", lowerLimit: "80", targetSpread: "3" });
+  await bot.tick();
+  setPrice(101.2); await bot.tick(); // 101 fills → buy target at 98 (far away)
+  setPrice(100.6); await bot.tick(); // price back near 101, target not filled
+  const sellLevels = open().filter(o => o.role === "entry" && o.side === "sell").map(o => o.level);
+  assert.ok(!sellLevels.includes(1), "level +1 stays blocked until its target fills");
+  assert.equal(open().filter(o => o.role === "target" && o.level === 1).length, 1);
+});
