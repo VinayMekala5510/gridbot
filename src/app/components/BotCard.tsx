@@ -178,7 +178,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
         {tab === "roundtrips" && <RoundtripTable botId={bot.id} count={bot.roundtrips} inverse={bot.config.exchange.startsWith("deribit") && !bot.config.symbol.includes("_")} />}
         {tab === "activity" && (bot.events.length === 0 ? <p className="empty">No activity yet.</p> : (
           <ol className="events">{bot.events.map((e, i) => (
-            <li key={`${e.time}-${i}`} className={e.level}><time className="mono">{clock(e.time)}</time>{e.message}</li>
+            <li key={`${e.time}-${i}`} className={`event event-${e.level}`}><time className="mono">{clock(e.time)}</time><span className="event-msg">{e.message}</span></li>
           ))}</ol>
         ))}
       </div>
