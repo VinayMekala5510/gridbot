@@ -115,6 +115,8 @@ export interface Store {
   /** Returns null when this trade was already recorded for the bot. */
   insertFill(f: Omit<FillRecord, "id">): Promise<FillRecord | null>;
   recentFills(botId: number, limit: number): Promise<FillRecord[]>;
+  /** Fills newest first, with the exchange order id and (for targets) the entry fill price. */
+  tradeHistory(botId: number, limit: number): Promise<(FillRecord & { exchangeOrderId: string | null; refPrice: string | null })[]>;
   fillTradeIds(botId: number, orderIds: number[]): Promise<string[]>;
   fillAggregates(botId: number): Promise<FillAggregate[]>;
 

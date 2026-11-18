@@ -272,6 +272,17 @@ export class MysqlStore implements Store {
       "SELECT * FROM fills WHERE bot_id = ? ORDER BY id DESC LIMIT ?", [botId, limit]);
     return rows.map(fillFromRow);
   }
+  async tradeHistory(botId: number, limit: number) {
+    const [rows] = await this.pool.query<Row[]>(
+      `SELECT f.*, o.exchange_order_id AS o_exchange_order_id, o.ref_price AS o_ref_price
+       FROM fills f LEFT JOIN orders o ON o.id = f.order_id
+       WHERE f.bot_id = ? ORDER BY f.filled_at DESC, f.id DESC LIMIT ?`, [botId, limit]);
+    return rows.map(r => ({
+      ...fillFromRow(r),
+      exchangeOrderId: r.o_exchange_order_id === null ? null : String(r.o_exchange_order_id),
+      refPrice: decOrNull(r.o_ref_price),
+    }));
+  }
   async fillTradeIds(botId: number, orderIds: number[]) {
     if (!orderIds.length) return [];
     const [rows] = await this.pool.query<Row[]>(

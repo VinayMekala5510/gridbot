@@ -82,6 +82,8 @@ export class GridBot {
   get symbol() { return this.rec.config.symbol; }
   get isStopped() { return this.stopRequested || !["idle", "running"].includes(this.rec.status); }
   get isLive() { return this.adapter.live; }
+  /** Inverse contract (qty in USD, e.g. Deribit BTC-PERPETUAL). */
+  get isInverse() { return this.inverse; }
 
   /** Computes the grid levels (rounded to the venue's tick rules) inside the limits. */
   static async computeLevels(rec: BotRecord, adapter: ExchangeAdapter): Promise<Level[]> {

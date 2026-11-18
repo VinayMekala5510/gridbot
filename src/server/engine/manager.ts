@@ -1,6 +1,6 @@
 import Decimal from "decimal.js";
 import { exchangeInfo } from "../../shared/exchanges";
-import type { AccountView, BotConfig, ExchangeId, RoundtripView, Snapshot } from "../../shared/types";
+import type { AccountView, BotConfig, ExchangeId, RoundtripView, Snapshot, TradeView } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
 import { BinanceAccount, BinanceAdapter, validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
@@ -249,6 +249,29 @@ export class BotManager {
   }
 
   /** Every completed roundtrip of a bot (newest first), straight from storage. */
+  /** Exchange-style trade history: every fill of a bot, newest first, with realized PnL on target fills. */
+  async trades(id: number, limit = 1000): Promise<TradeView[]> {
+    const bot = this.bots.get(id);
+    if (!bot) throw new UserError("Bot not found");
+    const inverse = bot.isInverse;
+    return (await this.store.tradeHistory(id, limit)).map(f => {
+      const price = new Decimal(f.price), qty = new Decimal(f.qty);
+      let realized: string | null = null;
+      if (f.role === "target" && f.refPrice) {
+        const ref = new Decimal(f.refPrice);
+        const coins = inverse ? qty.div(ref) : qty;
+        // target SELL closes a buy entry; target BUY closes a sell entry
+        const pnl = f.side === "sell" ? price.minus(ref).times(coins) : ref.minus(price).times(coins);
+        realized = pnl.toDecimalPlaces(10).toFixed();
+      }
+      return {
+        id: f.id, time: f.time, side: f.side, role: f.role, level: f.level, price: f.price, qty: f.qty,
+        value: (inverse ? qty : qty.times(price)).toDecimalPlaces(8).toFixed(), fee: f.fee, realizedPnl: realized,
+        exchangeOrderId: f.exchangeOrderId, tradeId: f.tradeId,
+      };
+    });
+  }
+
   async roundtrips(id: number, limit = 2000): Promise<RoundtripView[]> {
     if (!this.bots.has(id)) throw new UserError("Bot not found");
     return (await this.store.recentRoundtrips(id, limit)).map(r => ({

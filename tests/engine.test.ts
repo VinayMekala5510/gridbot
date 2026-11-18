@@ -318,3 +318,26 @@ test("a level whose target is still waiting is never re-placed, even when it is 
   assert.ok(!sellLevels.includes(1), "level +1 stays blocked until its target fills");
   assert.equal(open().filter(o => o.role === "target" && o.level === 1).length, 1);
 });
+
+test("trade history lists every fill with realized PnL on target fills", async () => {
+  const { BotManager } = await import("../src/server/engine/manager");
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const manager = new BotManager(store, { tickMs: 3_600_000, adapterFactory: () => new PaperAdapter(async () => price) });
+  const id = await manager.createBot({ ...base, mmQty: "10" });
+  const bot = (manager as unknown as { bots: Map<number, GridBot> }).bots.get(id)!;
+  await bot.tick();
+  price = new Decimal(101.2); await bot.tick();   // entry sell 101 fills
+  price = new Decimal(100.4); await bot.tick();   // target buy 100.5 fills → +0.5
+  const trades = await manager.trades(id);
+  manager.shutdown();
+  assert.equal(trades.length, 2);
+  const [target, entry] = trades;                 // newest first
+  assert.equal(target.role, "target");
+  assert.equal(target.side, "buy");
+  assert.equal(target.realizedPnl, "0.5");
+  assert.equal(target.value, "100.5");
+  assert.equal(entry.role, "entry");
+  assert.equal(entry.realizedPnl, null);
+  assert.ok(entry.exchangeOrderId?.startsWith("paper-"));
+});

@@ -72,6 +72,12 @@ export class MemoryStore implements Store {
   async recentFills(botId: number, limit: number) {
     return this.fills.filter(f => f.botId === botId).sort((a, b) => b.id - a.id).slice(0, limit).map(f => ({ ...f }));
   }
+  async tradeHistory(botId: number, limit: number) {
+    return (await this.recentFills(botId, limit)).map(f => {
+      const o = this.orders.find(x => x.id === f.orderId);
+      return { ...f, exchangeOrderId: o?.exchangeOrderId ?? null, refPrice: o?.refPrice ?? null };
+    });
+  }
   async fillTradeIds(botId: number, orderIds: number[]) {
     return this.fills.filter(f => f.botId === botId && orderIds.includes(f.orderId)).map(f => f.tradeId);
   }

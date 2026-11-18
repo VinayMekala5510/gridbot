@@ -70,6 +70,24 @@ export interface OrderView {
   createdAt: number;
 }
 
+/** One fill, exchange trade-history style. */
+export interface TradeView {
+  id: number;
+  time: number;
+  side: Side;
+  role: OrderRole;
+  level: number;
+  price: string;
+  qty: string;
+  /** price × qty in the quote currency (equals qty for USD-sized inverse contracts). */
+  value: string;
+  fee: string;
+  /** PnL this fill realized (target fills only, before fees). */
+  realizedPnl: string | null;
+  exchangeOrderId: string | null;
+  tradeId: string;
+}
+
 export interface FillView {
   id: number;
   orderId: number;

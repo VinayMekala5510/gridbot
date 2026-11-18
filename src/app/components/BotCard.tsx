@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { exchangeInfo } from "@/shared/exchanges";
-import type { BotStatus, BotView, OrderView, RoundtripView } from "@/shared/types";
+import type { BotStatus, BotView, OrderView, RoundtripView, TradeView } from "@/shared/types";
 import { api, clock, fmt, fmtPnl, pnlClass, timeAgo } from "../lib/client";
 
 const STATUS_LABEL: Record<BotStatus, string> = {
@@ -176,11 +176,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
           </>
         )}
         {tab === "roundtrips" && <RoundtripTable botId={bot.id} count={bot.roundtrips} inverse={bot.config.exchange.startsWith("deribit") && !bot.config.symbol.includes("_")} />}
-        {tab === "activity" && (bot.events.length === 0 ? <p className="empty">No activity yet.</p> : (
-          <ol className="events">{bot.events.map((e, i) => (
-            <li key={`${e.time}-${i}`} className={`event event-${e.level}`}><time className="mono">{clock(e.time)}</time><span className="event-msg">{e.message}</span></li>
-          ))}</ol>
-        ))}
+        {tab === "activity" && <ActivityPanel bot={bot} />}
       </div>
     </article>
   );
@@ -268,6 +264,103 @@ function RoundtripTable({ botId, count, inverse }: { botId: number; count: numbe
           );
         })}</tbody>
       </table>
+    </>
+  );
+}
+
+/** Activity tab: exchange-style trade history (default) or the bot's event log. */
+function ActivityPanel({ bot }: { bot: BotView }) {
+  const [view, setView] = useState<"trades" | "events">("trades");
+  return (
+    <>
+      <div className="activity-head">
+        <div className="seg" role="group" aria-label="Activity view">
+          <button className={view === "trades" ? "on" : ""} aria-pressed={view === "trades"} onClick={() => setView("trades")}>Trade history</button>
+          <button className={view === "events" ? "on" : ""} aria-pressed={view === "events"} onClick={() => setView("events")}>Bot events</button>
+        </div>
+      </div>
+      {view === "trades" ? <TradeHistory bot={bot} /> : bot.events.length === 0 ? <p className="empty">No activity yet.</p> : (
+        <ol className="events">{bot.events.map((e, i) => (
+          <li key={`${e.time}-${i}`} className={`event event-${e.level}`}><time className="mono">{clock(e.time)}</time><span className="event-msg">{e.message}</span></li>
+        ))}</ol>
+      )}
+    </>
+  );
+}
+
+const tradeTime = (ms: number) => new Date(ms).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+/** Every fill of the bot, newest first, like an exchange's trade history. */
+function TradeHistory({ bot }: { bot: BotView }) {
+  const [rows, setRows] = useState<TradeView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [side, setSide] = useState<"all" | "buy" | "sell">("all");
+  const [role, setRole] = useState<"all" | "entry" | "target">("all");
+  const fillCount = bot.fillSummary.buyCount + bot.fillSummary.sellCount;
+  useEffect(() => {
+    let cancelled = false;
+    api<{ trades: TradeView[] }>(`/api/bots/${bot.id}/trades`)
+      .then(r => { if (!cancelled) { setRows(r.trades); setError(null); } })
+      .catch(err => { if (!cancelled) setError((err as Error).message); });
+    return () => { cancelled = true; };
+  }, [bot.id, fillCount]);
+
+  if (error) return <p className="empty">Could not load trade history: {error}</p>;
+  if (!rows) return <p className="empty">Loading trade history…</p>;
+  if (!rows.length) return <p className="empty">No trades yet.</p>;
+
+  const shown = rows.filter(t => (side === "all" || t.side === side) && (role === "all" || t.role === role));
+  const sum = (pick: (t: TradeView) => string | null) => shown.reduce((s, t) => s + Number(pick(t) ?? 0), 0);
+  const symbol = bot.config.symbol;
+
+  function downloadCsv() {
+    const head = ["time", "symbol", "side", "type", "level", "price", "qty", "value", "fee", "realized_pnl", "order_id", "trade_id"];
+    const lines = shown.map(t => [new Date(t.time).toISOString(), symbol, t.side, t.role, t.level, t.price, t.qty, t.value, t.fee,
+      t.realizedPnl ?? "", t.exchangeOrderId ?? "", t.tradeId].map(v => `"${String(v).replace(/"/gu, '""')}"`).join(","));
+    const blob = new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${bot.config.name}-trades.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  return (
+    <>
+      <div className="trade-tools">
+        <div className="seg" role="group" aria-label="Filter by side">
+          {(["all", "buy", "sell"] as const).map(s => <button key={s} className={side === s ? "on" : ""} aria-pressed={side === s} onClick={() => setSide(s)}>{s === "all" ? "All" : s === "buy" ? "Buy" : "Sell"}</button>)}
+        </div>
+        <div className="seg" role="group" aria-label="Filter by type">
+          {(["all", "entry", "target"] as const).map(r => <button key={r} className={role === r ? "on" : ""} aria-pressed={role === r} onClick={() => setRole(r)}>{r === "all" ? "All types" : r === "entry" ? "Entries" : "Targets"}</button>)}
+        </div>
+        <button className="btn ghost small" onClick={downloadCsv}>Download CSV</button>
+      </div>
+      <div className="fill-summary">
+        <span>{shown.length} trade{shown.length === 1 ? "" : "s"}</span>
+        <span>Volume <b className="mono">{fmt(sum(t => t.value))}</b></span>
+        <span>Fees <b className="mono">{fmt(sum(t => t.fee), 6)}</b></span>
+        <span>Realized <b className={`mono ${pnlClass(sum(t => t.realizedPnl))}`}>{fmtPnl(sum(t => t.realizedPnl))}</b></span>
+      </div>
+      <table className="trades">
+        <thead><tr><th>Time</th><th>Pair</th><th>Side</th><th>Type</th><th>Price</th><th>Qty</th><th>Value</th><th>Fee</th><th>Realized PnL</th><th>Order ID</th><th>Trade ID</th></tr></thead>
+        <tbody>{shown.map(t => (
+          <tr key={t.id}>
+            <td className="mono">{tradeTime(t.time)}</td>
+            <td>{symbol}</td>
+            <td className={t.side}>{t.side.toUpperCase()}</td>
+            <td>{t.role === "entry" ? "Entry" : "Target"} · L{t.level > 0 ? `+${t.level}` : t.level}</td>
+            <td className="mono">{fmt(t.price)}</td>
+            <td className="mono">{fmt(t.qty)}</td>
+            <td className="mono">{fmt(t.value)}</td>
+            <td className="mono">{fmt(t.fee, 6)}</td>
+            <td className="mono">{t.realizedPnl === null ? "—" : <b className={pnlClass(t.realizedPnl)}>{fmtPnl(t.realizedPnl)}</b>}</td>
+            <td className="mono id-cell" title={t.exchangeOrderId ?? ""}>{t.exchangeOrderId ?? "—"}</td>
+            <td className="mono id-cell" title={t.tradeId}>{t.tradeId}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      {rows.length >= 1000 && <p className="empty">Showing the latest 1,000 trades.</p>}
     </>
   );
 }
