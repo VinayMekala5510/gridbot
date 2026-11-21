@@ -1,5 +1,6 @@
 import { setDefaultResultOrder } from "node:dns";
 import { createServer } from "node:http";
+import { setDefaultAutoSelectFamily } from "node:net";
 import next from "next";
 import { loadEnv, env, envInt } from "./src/server/env";
 import { handleApi } from "./src/server/api";
@@ -13,9 +14,12 @@ import type { Store } from "./src/server/store/types";
 // Bound to 127.0.0.1 by default; nginx (HTTPS) or an SSH tunnel sits in front.
 
 loadEnv();
-// The EC2 server has no IPv6 route. Hosts that publish IPv6 addresses (e.g. api.telegram.org)
-// made Node's fetch time out (ETIMEDOUT); connect over IPv4 first.
+// The EC2 server has no IPv6 route. For hosts that publish IPv6 addresses (e.g. api.telegram.org)
+// Node raced IPv6/IPv4 with a 250 ms limit per attempt, but connecting to Telegram from AWS
+// takes ~170–280 ms, so calls sometimes failed with ETIMEDOUT ("fetch failed").
+// Use IPv4 first and give each connection its normal full timeout.
 setDefaultResultOrder("ipv4first");
+setDefaultAutoSelectFamily(false);
 const dev = process.argv.includes("--dev");
 const host = env("HOST") ?? "127.0.0.1";
 const port = envInt("PORT", 3000);
