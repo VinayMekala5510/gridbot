@@ -399,3 +399,34 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .topbar-right { min-width: 0; gap: 6px; }
   .topbar .user-chip, .topbar .chip { display: none; }
 }
+
+/* ── Price alerts ── */
+.form-card.wide { grid-column: 1 / -1; }
+.live-price { display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-2); }
+.live-price b { font-size: 30px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.live-price small { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); }
+.live-price small i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.live-price small.live-on i { background: var(--buy); box-shadow: 0 0 0 3px rgba(34, 197, 139, .2); }
+.alerts-table { overflow-x: auto; }
+.alerts-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.alerts-table th { text-align: left; font-weight: 500; color: var(--faint); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.alerts-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+.alerts-table tr.alert-hit td { background: rgba(245, 184, 74, .08); }
+.alert-status { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 3px 8px; border-radius: 999px; }
+.alert-status.watching { color: var(--accent-2); background: rgba(79, 140, 255, .14); }
+.alert-status.hit-up { color: var(--buy); background: rgba(34, 197, 139, .16); }
+.alert-status.hit-down { color: var(--sell); background: rgba(255, 93, 108, .16); }
+.alert-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.nav-count.hot { background: var(--warn); color: #1a1200; }
+.alert-notice { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; }
+.alert-notice.bad { color: var(--danger-text); }
+.tg-state { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-2); }
+.tg-state i { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.tg-state.on i { background: var(--buy); box-shadow: 0 0 0 3px rgba(34, 197, 139, .2); }
+.tg-steps { margin: 0; padding-left: 22px; display: grid; gap: 14px; font-size: 14px; }
+.tg-steps li { color: var(--muted); }
+.tg-steps li.now { color: var(--text); }
+.tg-steps code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+.tg-row { margin-top: 8px; flex-wrap: wrap; }
+.tg-row input { flex: 1 1 220px; min-width: 0; height: 40px; padding: 0 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-2); color: var(--text); }
+.tg-row .btn { height: 40px; }

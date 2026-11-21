@@ -10,6 +10,8 @@ import { fetchPrice } from "../exchanges/prices";
 import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
 import type { AccountRecord, BotRecord, Store } from "../store/types";
 import { GridBot, MAX_OPEN_PER_SIDE, message } from "./grid";
+import { AlertMonitor } from "../alerts";
+import { TelegramNotifier, alertMessage } from "../telegram";
 
 export class UserError extends Error {}
 
@@ -36,11 +38,27 @@ export class BotManager {
   private bnAccounts = new Map<number, BinanceAccount>();
   private dbAccounts = new Map<number, DeribitAccount>();
   private frozen = false;
+  /** Price alerts, checked by the server every few seconds. */
+  readonly alerts: AlertMonitor;
+  /** Telegram notifications for price alerts. */
+  readonly telegram: TelegramNotifier;
 
-  constructor(private readonly store: Store, private readonly opts: ManagerOptions = {}) {}
+  constructor(private readonly store: Store, private readonly opts: ManagerOptions = {}) {
+    this.alerts = new AlertMonitor(store);
+    this.telegram = new TelegramNotifier(store);
+    this.alerts.onTrigger = async (a, side, price) => {
+      if (!this.telegram.status().configured) return "Telegram not set up";
+      await this.telegram.send(alertMessage({
+        symbol: a.symbol, exchangeLabel: exchangeInfo(a.exchange).label, side, price, upper: a.upper, lower: a.lower, time: Date.now(),
+      }));
+      return "Sent to Telegram";
+    };
+  }
 
   async init(): Promise<void> {
     await this.store.init();
+    await this.telegram.init();
+    await this.alerts.init();
     const accounts = new Map((await this.store.listAccounts()).map(a => [a.id, a]));
     for (const rec of await this.store.listBots()) {
       try {
@@ -71,6 +89,7 @@ export class BotManager {
 
   /** Graceful process shutdown: loops stop, orders stay, bots resume on next start. */
   shutdown(): void {
+    this.alerts.stop();
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     for (const bot of this.bots.values()) bot.suspend();
   }
@@ -335,7 +354,7 @@ export class BotManager {
         totalBots: bots.length,
         roundtrips: bots.reduce((s, b) => s + b.roundtrips, 0),
       },
-      bots, accounts,
+      bots, accounts, alerts: this.alerts.view(),
     };
   }
 }

@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import mysql, { type Pool, type RowDataPacket, type ResultSetHeader } from "mysql2/promise";
 import type { BotConfig, BotStatus, OrderStatus } from "../../shared/types";
 import type {
-  AccountRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
+  AccountRecord, AlertRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
   OrderPatch, OrderRecord, RoundtripRecord, Store,
 } from "./types";
 
@@ -101,6 +101,23 @@ const SCHEMA = [
     message VARCHAR(1000) NOT NULL,
     created_at DATETIME(3) NOT NULL,
     INDEX idx_events_bot (bot_id, id)
+  ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS price_alerts (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    exchange VARCHAR(40) NOT NULL,
+    symbol VARCHAR(60) NOT NULL,
+    upper_price DECIMAL(38,18) NULL,
+    lower_price DECIMAL(38,18) NULL,
+    status VARCHAR(20) NOT NULL,
+    triggered_at DATETIME(3) NULL,
+    triggered_price DECIMAL(38,18) NULL,
+    created_at DATETIME(3) NOT NULL,
+    deleted_at DATETIME(3) NULL
+  ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    name VARCHAR(100) PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME(3) NOT NULL
   ) ENGINE=InnoDB`,
 ];
 
@@ -316,6 +333,42 @@ export class MysqlStore implements Store {
   async insertEvent(e: EventRecord) {
     await this.pool.execute("INSERT INTO events (bot_id, level, message, created_at) VALUES (?,?,?,?)",
       [e.botId, e.level, e.message.slice(0, 1000), new Date(e.time)]);
+  }
+  async createAlert(a: { exchange: AlertRecord["exchange"]; symbol: string; upper: string | null; lower: string | null }) {
+    const now = Date.now();
+    const [res] = await this.pool.execute<ResultSetHeader>(
+      "INSERT INTO price_alerts (exchange, symbol, upper_price, lower_price, status, created_at) VALUES (?,?,?,?,?,?)",
+      [a.exchange, a.symbol, a.upper, a.lower, "watching", new Date(now)]);
+    return { ...a, id: res.insertId, status: "watching" as const, triggeredAt: null, triggeredPrice: null, createdAt: now };
+  }
+  async listAlerts(): Promise<AlertRecord[]> {
+    const [rows] = await this.pool.query<Row[]>("SELECT * FROM price_alerts WHERE deleted_at IS NULL ORDER BY id DESC");
+    return rows.map(r => ({
+      id: Number(r.id), exchange: r.exchange as AlertRecord["exchange"], symbol: String(r.symbol),
+      upper: decOrNull(r.upper_price), lower: decOrNull(r.lower_price), status: r.status as AlertRecord["status"],
+      triggeredAt: msOrNull(r.triggered_at), triggeredPrice: decOrNull(r.triggered_price), createdAt: ms(r.created_at),
+    }));
+  }
+  async updateAlert(id: number, patch: Partial<Pick<AlertRecord, "status" | "triggeredAt" | "triggeredPrice">>) {
+    const sets: string[] = [], values: unknown[] = [];
+    if (patch.status !== undefined) { sets.push("status = ?"); values.push(patch.status); }
+    if (patch.triggeredAt !== undefined) { sets.push("triggered_at = ?"); values.push(date(patch.triggeredAt)); }
+    if (patch.triggeredPrice !== undefined) { sets.push("triggered_price = ?"); values.push(patch.triggeredPrice); }
+    if (!sets.length) return;
+    await this.pool.execute(`UPDATE price_alerts SET ${sets.join(", ")} WHERE id = ?`, [...values, id] as never[]);
+  }
+  async deleteAlert(id: number) {
+    await this.pool.execute("UPDATE price_alerts SET deleted_at = ? WHERE id = ?", [new Date(), id]);
+  }
+  async getSetting(name: string) {
+    const [rows] = await this.pool.execute<Row[]>("SELECT value FROM app_settings WHERE name = ?", [name]);
+    return rows[0] ? String(rows[0].value) : null;
+  }
+  async setSetting(name: string, value: string | null) {
+    if (value === null) await this.pool.execute("DELETE FROM app_settings WHERE name = ?", [name]);
+    else await this.pool.execute(
+      "INSERT INTO app_settings (name, value, updated_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)",
+      [name, value, new Date()]);
   }
   async recentEvents(botId: number, limit: number) {
     const [rows] = await this.pool.query<Row[]>(

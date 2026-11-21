@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import type { BotConfig, BotStatus, OrderStatus } from "../../shared/types";
 import type {
-  AccountRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
+  AccountRecord, AlertRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
   OrderPatch, OrderRecord, RoundtripRecord, Store,
 } from "./types";
 
@@ -100,6 +100,24 @@ export class MemoryStore implements Store {
     return this.roundtrips.filter(r => r.botId === botId).slice(-limit).reverse().map(r => ({ ...r }));
   }
   async insertEvent(e: EventRecord) { this.events.push({ ...e }); }
+  alerts: (AlertRecord & { deleted?: boolean })[] = [];
+  settings = new Map<string, string>();
+  async getSetting(name: string) { return this.settings.get(name) ?? null; }
+  async setSetting(name: string, value: string | null) { if (value === null) this.settings.delete(name); else this.settings.set(name, value); }
+  async createAlert(a: { exchange: AlertRecord["exchange"]; symbol: string; upper: string | null; lower: string | null }) {
+    const rec = { ...a, id: ++this.seq, status: "watching" as const, triggeredAt: null, triggeredPrice: null, createdAt: Date.now() };
+    this.alerts.push(rec);
+    return { ...rec };
+  }
+  async listAlerts() { return this.alerts.filter(a => !a.deleted).map(({ deleted: _d, ...a }) => ({ ...a })).reverse(); }
+  async updateAlert(id: number, patch: Partial<Pick<AlertRecord, "status" | "triggeredAt" | "triggeredPrice">>) {
+    const a = this.alerts.find(x => x.id === id);
+    if (a) Object.assign(a, patch);
+  }
+  async deleteAlert(id: number) {
+    const a = this.alerts.find(x => x.id === id);
+    if (a) a.deleted = true;
+  }
   async recentEvents(botId: number, limit: number) {
     return this.events.filter(e => e.botId === botId).slice(-limit).reverse();
   }

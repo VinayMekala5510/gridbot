@@ -124,4 +124,25 @@ export interface Store {
   recentRoundtrips(botId: number, limit: number): Promise<RoundtripRecord[]>;
   insertEvent(e: EventRecord): Promise<void>;
   recentEvents(botId: number, limit: number): Promise<EventRecord[]>;
+
+  createAlert(a: { exchange: ExchangeId; symbol: string; upper: string | null; lower: string | null }): Promise<AlertRecord>;
+  listAlerts(): Promise<AlertRecord[]>;
+  updateAlert(id: number, patch: Partial<Pick<AlertRecord, "status" | "triggeredAt" | "triggeredPrice">>): Promise<void>;
+  deleteAlert(id: number): Promise<void>;
+
+  /** Small app settings (e.g. Telegram); secret values are stored encrypted by the caller. */
+  getSetting(name: string): Promise<string | null>;
+  setSetting(name: string, value: string | null): Promise<void>;
+}
+
+export interface AlertRecord {
+  id: number;
+  exchange: ExchangeId;
+  symbol: string;
+  upper: string | null;
+  lower: string | null;
+  status: "watching" | "triggered_upper" | "triggered_lower";
+  triggeredAt: number | null;
+  triggeredPrice: string | null;
+  createdAt: number;
 }

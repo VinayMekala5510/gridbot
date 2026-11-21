@@ -184,6 +184,7 @@ export interface Snapshot {
   };
   bots: BotView[];
   accounts: AccountView[];
+  alerts: PriceAlertView[];
 }
 
 export const STOPPED_STATUSES: BotStatus[] = [
@@ -192,3 +193,21 @@ export const STOPPED_STATUSES: BotStatus[] = [
   "killed",
   "error",
 ];
+
+export type PriceAlertStatus = "watching" | "triggered_upper" | "triggered_lower";
+
+export interface PriceAlertView {
+  id: number;
+  exchange: ExchangeId;
+  symbol: string;
+  upper: string | null;
+  lower: string | null;
+  status: PriceAlertStatus;
+  lastPrice: string | null;
+  lastPriceAt: number | null;
+  triggeredAt: number | null;
+  triggeredPrice: string | null;
+  /** Notification result for a fired alert, e.g. "Sent to Telegram". */
+  notice: string | null;
+  createdAt: number;
+}

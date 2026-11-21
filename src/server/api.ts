@@ -4,6 +4,8 @@ import { EXCHANGE_IDS } from "../shared/exchanges";
 import { attemptLogin, clearSession, sessionUser } from "./auth";
 import { hasMasterKey } from "./crypto";
 import { listSymbols } from "./exchanges/symbols";
+import { AlertError } from "./alerts";
+import { TelegramError } from "./telegram";
 import { BotManager, UserError } from "./engine/manager";
 import { message } from "./engine/grid";
 
@@ -16,6 +18,17 @@ const accountSchema = z.object({
   publicKey: z.string().trim().min(1).max(255),
   secret: z.string().trim().min(1).max(500),
   passphrase: z.string().max(200).optional(),
+});
+
+// Empty or missing → null (that side has no limit).
+const optionalPrice = z.string().trim().max(40).regex(/^(\d+(\.\d+)?)?$/u, "must be a positive number").nullable().optional()
+  .transform(v => (v ? v : null));
+
+const alertSchema = z.object({
+  exchange: z.enum(EXCHANGE_IDS),
+  symbol: z.string().trim().min(1).max(60),
+  upper: optionalPrice,
+  lower: optionalPrice,
 });
 
 const botSchema = z.object({
@@ -134,6 +147,47 @@ export async function handleApi(manager: BotManager, req: IncomingMessage, res: 
     if (method === "POST" && path === "/api/bots") {
       const id = await manager.createBot(parse(botSchema, await readJson(req)));
       return send(res, 201, { id }), true;
+    }
+
+    if (path === "/api/telegram" || path.startsWith("/api/telegram/")) {
+      try {
+        if (method === "GET" && path === "/api/telegram") return send(res, 200, manager.telegram.status()), true;
+        if (method === "POST" && path === "/api/telegram") {
+          if (!hasMasterKey()) throw new UserError("Server MASTER_KEY is not configured — the bot token cannot be stored securely");
+          const body = parse(z.object({ token: z.string().max(200).nullable().optional(), chatId: z.string().max(100).nullable().optional() }), await readJson(req));
+          return send(res, 200, await manager.telegram.save(body)), true;
+        }
+        if (method === "POST" && path === "/api/telegram/detect") return send(res, 200, await manager.telegram.detectChat()), true;
+        if (method === "POST" && path === "/api/telegram/test") {
+          await manager.telegram.send("✅ <b>Gridbot test message</b>\nPrice alerts will be sent to this chat.");
+          return send(res, 200, { ok: true }), true;
+        }
+        if (method === "DELETE" && path === "/api/telegram") { await manager.telegram.clear(); return send(res, 200, { ok: true }), true; }
+      } catch (err) {
+        if (err instanceof TelegramError) throw new UserError(err.message);
+        throw err;
+      }
+    }
+
+    if (method === "POST" && path === "/api/alerts") {
+      const body = parse(alertSchema, await readJson(req));
+      try {
+        return send(res, 201, await manager.alerts.create(body)), true;
+      } catch (err) {
+        if (err instanceof AlertError) throw new UserError(err.message);
+        throw err;
+      }
+    }
+
+    if ((m = path.match(/^\/api\/alerts\/(\d+)(\/rearm)?$/u)) && (method === "DELETE" || (method === "POST" && m[2]))) {
+      try {
+        if (method === "DELETE") await manager.alerts.remove(Number(m[1]));
+        else await manager.alerts.rearm(Number(m[1]));
+      } catch (err) {
+        if (err instanceof AlertError) throw new UserError(err.message);
+        throw err;
+      }
+      return send(res, 200, { ok: true }), true;
     }
 
     if (method === "GET" && (m = path.match(/^\/api\/bots\/(\d+)\/trades$/u))) {

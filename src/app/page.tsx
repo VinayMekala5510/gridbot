@@ -4,6 +4,7 @@ import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
 import { AccountSettings } from "./components/AccountSettings";
 import { BotParameters } from "./components/BotParameters";
+import { PriceAlerts } from "./components/PriceAlerts";
 import { BotTile, botTag } from "./components/BotTile";
 import { Logo } from "./components/Logo";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -11,11 +12,12 @@ import { api, fmtPnl, pnlClass } from "./lib/client";
 
 type Toast = { id: number; kind: "ok" | "error"; text: string };
 type Filter = "all" | "active" | "stopped";
-type View = "dashboard" | "accounts" | "new-bot";
+type View = "dashboard" | "accounts" | "new-bot" | "alerts";
 const VIEWS: { id: View; label: string; icon: string }[] = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
   { id: "accounts", label: "Account Settings", icon: "⚿" },
   { id: "new-bot", label: "Bot Parameters", icon: "＋" },
+  { id: "alerts", label: "Price Alerts", icon: "⚑" },
 ];
 const ACTIVE_KEY = "gridbot.activeAccount";
 
@@ -88,6 +90,22 @@ export default function Dashboard() {
     window.location.replace("/login");
   }
 
+  // Price alerts that fire while the dashboard is open: toast + short beep.
+  const alertSeen = useRef<Map<number, string> | null>(null);
+  useEffect(() => {
+    if (!snap) return;
+    const prev = alertSeen.current;
+    const next = new Map(snap.alerts.map(a => [a.id, a.status] as const));
+    if (prev) {
+      for (const a of snap.alerts) {
+        if (a.status === "watching" || prev.get(a.id) === a.status || !prev.has(a.id)) continue;
+        notify("error", `Price alert: ${a.symbol} ${a.status === "triggered_upper" ? "reached the upper limit" : "reached the lower limit"} at ${a.triggeredPrice}`);
+        beep();
+      }
+    }
+    alertSeen.current = next;
+  }, [snap, notify]);
+
   // Drop a stale active-account selection (e.g. account deleted elsewhere).
   useEffect(() => {
     if (snap && activeAccountId !== null && !snap.accounts.some(a => a.id === activeAccountId)) chooseAccount(null);
@@ -143,6 +161,7 @@ export default function Dashboard() {
               <span className="nav-label">{v.label}</span>
               {v.id === "dashboard" && snap && <span className="nav-count">{snap.totals.runningBots}</span>}
               {v.id === "accounts" && snap && <span className="nav-count">{snap.accounts.length}</span>}
+              {v.id === "alerts" && snap && <span className={`nav-count${snap.alerts.some(a => a.status !== "watching") ? " hot" : ""}`}>{snap.alerts.length}</span>}
             </button>
           ))}
         </nav>
@@ -151,6 +170,7 @@ export default function Dashboard() {
           {view === "accounts" && (
             <AccountSettings accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} onActiveAccount={chooseAccount} notify={notify} />
           )}
+          {view === "alerts" && <PriceAlerts alerts={snap?.alerts ?? []} now={snap?.serverTime ?? Date.now()} notify={notify} />}
           {view === "new-bot" && (
             <BotParameters accounts={snap?.accounts ?? []} activeAccountId={activeAccountId} notify={notify} onCreated={() => go("dashboard")} />
           )}
@@ -215,4 +235,21 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+/** Short two-tone beep (browsers only play sound after the page has been clicked once). */
+function beep() {
+  try {
+    const ctx = new AudioContext();
+    [880, 1320].forEach((hz, i) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.frequency.value = hz;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.16);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.17);
+    });
+    setTimeout(() => void ctx.close(), 800);
+  } catch { /* audio unavailable */ }
 }
