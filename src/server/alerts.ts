@@ -69,8 +69,12 @@ export class AlertMonitor {
             const rec = a, at = a.triggeredPrice;
             this.notices.set(a.id, "Sending notification…");
             void this.onTrigger(rec, side, at)
-              .then(note => this.notices.set(rec.id, note))
-              .catch(err => this.notices.set(rec.id, `Notification failed: ${err instanceof Error ? err.message : String(err)}`));
+              .then(note => { this.notices.set(rec.id, note); console.log(`Price alert ${rec.id}: ${note}`); })
+              .catch(err => {
+                const note = `Notification failed: ${err instanceof Error ? err.message : String(err)}`;
+                this.notices.set(rec.id, note);
+                console.error(`Price alert ${rec.id}: ${note}`);
+              });
           }
         }
       }));

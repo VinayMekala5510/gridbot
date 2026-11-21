@@ -35,7 +35,13 @@ async function call<T>(token: string, method: string, body: Record<string, unkno
   }
   const data = await res.json().catch(() => ({})) as { ok?: boolean; result?: T; description?: string; parameters?: { retry_after?: number } };
   if (!data.ok) {
-    const e = new TelegramError(`Telegram: ${data.description ?? `HTTP ${res.status}`}`);
+    const desc = data.description ?? `HTTP ${res.status}`;
+    const hint = /can't send messages to the bot/iu.test(desc)
+      ? " The saved chat is the bot itself. Open the bot in Telegram, press Start, then use \"Detect chat ID\"."
+      : /chat not found|bot was blocked|have no rights/iu.test(desc)
+        ? " Open the bot in Telegram, press Start, then use \"Detect chat ID\" again."
+        : "";
+    const e = new TelegramError(`Telegram: ${desc}.${hint}`);
     (e as TelegramError & { retryAfter?: number }).retryAfter = data.parameters?.retry_after;
     throw e;
   }
@@ -75,8 +81,14 @@ export class TelegramNotifier {
     if (input.chatId !== undefined && input.chatId !== null) {
       const chat = input.chatId.trim();
       if (!/^(-?\d{3,}|@[A-Za-z0-9_]{5,})$/u.test(chat)) throw new TelegramError("Chat ID should be a number (e.g. 123456789) or a channel name like @mychannel");
+      // A bot cannot message itself: its own @username is not a valid destination.
+      if (this.botUsername && chat.replace(/^@/u, "").toLowerCase() === this.botUsername.toLowerCase()) {
+        throw new TelegramError(`@${this.botUsername} is your bot's own name, not your chat. Open the bot in Telegram, press Start, then use "Detect chat ID".`);
+      }
       this.chatId = chat;
+      this.chatName = null;
       await this.store.setSetting(KEYS.chat, chat);
+      await this.store.setSetting(KEYS.chatName, null);
     }
     return this.status();
   }

@@ -68,6 +68,7 @@ test("Telegram: token check, encrypted storage and message sent to the saved cha
     const token = "123456789:" + "A".repeat(35);
     await tg.save({ token });
     assert.ok(!(await store.getSetting("telegram.token"))!.includes("AAAA"), "token stored encrypted");
+    await assert.rejects(tg.save({ chatId: "@Gridbot_Alerts_Bot" }), /bot's own name/u);
     const s = await tg.detectChat();
     assert.equal(s.chatId, "987654321");
     assert.equal(s.chatName, "Vinay");
