@@ -1,3 +1,4 @@
+import { setDefaultResultOrder } from "node:dns";
 import { createServer } from "node:http";
 import next from "next";
 import { loadEnv, env, envInt } from "./src/server/env";
@@ -12,6 +13,9 @@ import type { Store } from "./src/server/store/types";
 // Bound to 127.0.0.1 by default; nginx (HTTPS) or an SSH tunnel sits in front.
 
 loadEnv();
+// The EC2 server has no IPv6 route. Hosts that publish IPv6 addresses (e.g. api.telegram.org)
+// made Node's fetch time out (ETIMEDOUT); connect over IPv4 first.
+setDefaultResultOrder("ipv4first");
 const dev = process.argv.includes("--dev");
 const host = env("HOST") ?? "127.0.0.1";
 const port = envInt("PORT", 3000);
