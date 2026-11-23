@@ -1,5 +1,6 @@
 "use client";
 import { exchangeInfo } from "@/shared/exchanges";
+import { gridModelOf } from "@/shared/types";
 import type { BotStatus, BotView } from "@/shared/types";
 
 const BADGE: Record<BotStatus, { text: string; cls: string }> = {
@@ -7,6 +8,7 @@ const BADGE: Record<BotStatus, { text: string; cls: string }> = {
   running: { text: "RUNNING", cls: "running" },
   halted_volume_cap: { text: "VOLUME CAP", cls: "halted" },
   halted_limit_breach: { text: "LIMIT HIT", cls: "halted" },
+  halted_total_distance: { text: "TOTAL DISTANCE", cls: "halted" },
   killed: { text: "STOPPED", cls: "stopped" },
   error: { text: "ERROR", cls: "error" },
 };
@@ -34,7 +36,7 @@ export function BotTile({ bot, onOpen, dimmed = false }: { bot: BotView; onOpen:
       <div className="tile-exchange">{exchangeInfo(c.exchange).label.toUpperCase()}</div>
       <div className="tile-account"><span aria-hidden="true">⚿</span> {bot.accountName ? bot.accountName.toUpperCase() : "PAPER TRADING"}</div>
       <div className="tile-tags">
-        <span className="tile-tag">STEP-GRID</span>
+        <span className={`tile-tag ${gridModelOf(c)}`}>{gridModelOf(c).toUpperCase()}</span>
         {c.mode === "live" ? <span className="tile-tag live">LIVE</span> : <span className="tile-tag paper">PAPER</span>}
         <span className="tile-hash">#{botTag(bot)}</span>
       </div>

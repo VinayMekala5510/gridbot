@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { createHmac } from "node:crypto";
 import type { Side } from "../../shared/types";
 import { fetchPrice } from "./prices";
-import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, PlaceRequest, TrackedOrder } from "./types";
+import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
 
 // Binance Spot adapter: GTC limit orders, fills from /myTrades, HMAC-SHA256 signed requests.
 
@@ -233,6 +233,16 @@ export class BinanceAdapter implements ExchangeAdapter {
     const res = await this.account.signed("POST", "/api/v3/order", {
       symbol: r.symbol, side: req.side === "buy" ? "BUY" : "SELL", type: "LIMIT", timeInForce: "GTC",
       quantity: plain(req.qty), price: plain(req.price), newClientOrderId: req.clientId, newOrderRespType: "ACK",
+    }) as { orderId?: number };
+    if (res.orderId === undefined) throw new Error("Binance did not return an order id");
+    return { exchangeOrderId: String(res.orderId) };
+  }
+
+  async placeMarket(req: MarketRequest) {
+    const r = await symbolRules(req.symbol);
+    const res = await this.account.signed("POST", "/api/v3/order", {
+      symbol: r.symbol, side: req.side === "buy" ? "BUY" : "SELL", type: "MARKET",
+      quantity: plain(req.qty), newClientOrderId: req.clientId, newOrderRespType: "ACK",
     }) as { orderId?: number };
     if (res.orderId === undefined) throw new Error("Binance did not return an order id");
     return { exchangeOrderId: String(res.orderId) };

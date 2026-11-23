@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import type { ExchangeId, Side } from "../../shared/types";
 import { deribitInstrument, deribitUrl, fetchPrice } from "./prices";
-import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, PlaceRequest, TrackedOrder } from "./types";
+import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
 
 // Deribit perpetuals adapter (mainnet or testnet), JSON-RPC over HTTPS with
 // client-credentials OAuth. Inverse perps (BTC-PERPETUAL, ETH-PERPETUAL) take the
@@ -219,6 +219,15 @@ export class DeribitAdapter implements ExchangeAdapter {
     const r = await this.account.private(req.side === "buy" ? "buy" : "sell", {
       instrument_name: inst.name, amount: plain(req.qty), type: "limit", price: plain(req.price),
       label: req.clientId, time_in_force: "good_til_cancelled",
+    }) as { order?: { order_id?: string } };
+    if (!r.order?.order_id) throw new Error("Deribit did not return an order id");
+    return { exchangeOrderId: r.order.order_id };
+  }
+
+  async placeMarket(req: MarketRequest) {
+    const inst = await this.info(req.symbol);
+    const r = await this.account.private(req.side === "buy" ? "buy" : "sell", {
+      instrument_name: inst.name, amount: plain(req.qty), type: "market", label: req.clientId,
     }) as { order?: { order_id?: string } };
     if (!r.order?.order_id) throw new Error("Deribit did not return an order id");
     return { exchangeOrderId: r.order.order_id };

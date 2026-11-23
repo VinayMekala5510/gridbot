@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { exchangeInfo } from "@/shared/exchanges";
-import type { BotStatus, BotView, OrderView, RoundtripView, TradeView } from "@/shared/types";
+import { gridModelOf } from "@/shared/types";
+import type { BasketReason, BasketView, BotStatus, BotView, OrderView, RoundtripView, TradeView } from "@/shared/types";
 import { api, clock, fmt, fmtPnl, pnlClass, timeAgo } from "../lib/client";
 
 const STATUS_LABEL: Record<BotStatus, string> = {
@@ -9,6 +10,7 @@ const STATUS_LABEL: Record<BotStatus, string> = {
   running: "Running",
   halted_volume_cap: "Halted: Volume Cap Reached",
   halted_limit_breach: "Halted: Price Limit Breached",
+  halted_total_distance: "Stopped: Total Distance Reached",
   killed: "KILLED",
   error: "Halted: Error",
 };
@@ -20,8 +22,10 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
   const [busy, setBusy] = useState(false);
   const c = bot.config;
   const active = bot.status === "running" || bot.status === "idle";
-  const used = Number(bot.openExposure) / Number(c.mmQty);
-  const stepsTotal = Math.floor(Number(c.mmQty) / Number(c.stepQty) + 1e-9);
+  // basket-grid: the ceiling is one basket's share of Market making qty.
+  const cap = bot.basket ? Number(bot.basket.qty) : Number(c.mmQty);
+  const used = Number(bot.openExposure) / cap;
+  const stepsTotal = Math.floor(cap / Number(c.stepQty) + 1e-9);
   const stepsUsed = Math.round(Number(bot.openExposure) / Number(c.stepQty) * 100) / 100;
   const pct = Math.min(100, Math.max(0, used * 100));
 
@@ -68,6 +72,7 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
         <h4 className="settings-title">Bot parameters</h4>
         <dl className="params all">
           <div><dt>Bot name</dt><dd>{c.name}</dd></div>
+          <div><dt>Grid model</dt><dd>{gridModelOf(c)}</dd></div>
           <div><dt>Exchange</dt><dd>{exchangeInfo(c.exchange).label}</dd></div>
           <div><dt>Symbol</dt><dd>{c.symbol}</dd></div>
           <div><dt>Mode</dt><dd>{c.mode === "live" ? "Live" : "Paper"}</dd></div>
@@ -80,6 +85,11 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
           <div><dt>Market making qty</dt><dd>{fmt(c.mmQty)}</dd></div>
           <div><dt>Upper limit</dt><dd>{fmt(c.upperLimit)}</dd></div>
           <div><dt>Lower limit</dt><dd>{fmt(c.lowerLimit)}</dd></div>
+          {bot.basket && <>
+            <div><dt>Total distance</dt><dd>{fmt(c.totalDistance)}</dd></div>
+            <div><dt>Basket distance</dt><dd>{fmt(c.basketDistance)}</dd></div>
+            <div><dt>Baskets</dt><dd>{bot.basket.count} <small>× {fmt(bot.basket.qty)} qty each</small></dd></div>
+          </>}
           <div><dt>Open at once</dt><dd>3 buy + 3 sell</dd></div>
           <div><dt>Created</dt><dd>{new Date(bot.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</dd></div>
           <div><dt>Stopped</dt><dd>{bot.stoppedAt ? new Date(bot.stoppedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div>
@@ -88,15 +98,18 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
 
       <div className="volume">
         <div className="volume-head">
-          <span title="Filled entries whose target has not filled yet. A completed roundtrip frees its step. When all steps are in use the bot stops.">Steps in use (open exposure) / ceiling</span>
-          <b className="mono">{fmt(stepsUsed)} / {stepsTotal} steps · {fmt(bot.openExposure)} / {fmt(c.mmQty)} <small>({pct.toFixed(0)}%)</small></b>
+          <span title={bot.basket
+            ? "Filled entries of the current basket whose target has not filled yet. When the basket's qty is full it is squared off and the next basket starts."
+            : "Filled entries whose target has not filled yet. A completed roundtrip frees its step. When all steps are in use the bot stops."}>
+            {bot.basket ? "Basket qty in use / basket qty" : "Steps in use (open exposure) / ceiling"}</span>
+          <b className="mono">{fmt(stepsUsed)} / {stepsTotal} steps · {fmt(bot.openExposure)} / {fmt(cap)} <small>({pct.toFixed(0)}%)</small></b>
         </div>
         <div className="bar" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
           <div className={`bar-fill ${pct >= 90 ? "hot" : pct >= 60 ? "warm" : ""}`} style={{ width: `${pct}%` }} />
         </div>
       </div>
 
-      <div className="metrics">
+      <div className={`metrics${bot.basket ? " with-basket" : ""}`}>
         <Metric label="Net PnL" value={fmtPnl(bot.netPnl)} cls={pnlClass(bot.netPnl)} big />
         <Metric label="Roundtrips" value={String(bot.roundtrips)} big />
         <Metric label="Realized" value={fmtPnl(bot.realizedPnl)} cls={pnlClass(bot.realizedPnl)} />
@@ -112,7 +125,12 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
             sub={n ? `avg ${fmtPnl(Number(total) / n)}${last ? ` · last ${fmtPnl(last.pnl)}` : ""}` : "no roundtrips yet"}
             title="Total PnL of all completed roundtrips (entry + target pairs), before fees." />;
         })()}
+        {bot.basket && <Metric label={`Square-off PnL (${bot.basket.closed})`} value={bot.basket.closed ? fmtPnl(bot.squareoffPnl) : "—"}
+          cls={bot.basket.closed ? pnlClass(bot.squareoffPnl) : ""} sub={bot.basket.closed ? `${bot.basket.closed} basket${bot.basket.closed === 1 ? "" : "s"} closed` : "no basket closed yet"}
+          title="Total PnL of the market orders that closed each basket's position, before fees." />}
       </div>
+
+      {bot.basket && <BasketRoute bot={bot} />}
 
       <nav className="tabs" role="tablist">
         {([
@@ -179,6 +197,109 @@ export function BotCard({ bot, now, notify, onRemoved }: { bot: BotView; now: nu
         {tab === "activity" && <ActivityPanel bot={bot} />}
       </div>
     </article>
+  );
+}
+
+const REASON: Record<BasketReason, string> = {
+  distance_up: "basket distance ↑",
+  distance_down: "basket distance ↓",
+  qty_full: "qty full",
+  total_distance: "total distance",
+};
+
+/**
+ * basket-grid: every basket in the order it ran, from the zone it started in to the zone where it
+ * was squared off, with its RTP PnL and square-off PnL kept apart. The running basket is last.
+ */
+function BasketRoute({ bot }: { bot: BotView }) {
+  const info = bot.basket!;
+  const [rows, setRows] = useState<BasketView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api<{ baskets: BasketView[] }>(`/api/bots/${bot.id}/baskets`)
+      .then(r => { if (!cancelled) { setRows(r.baskets); setError(null); } })
+      .catch(err => { if (!cancelled) setError((err as Error).message); });
+    return () => { cancelled = true; };
+  }, [bot.id, info.closed]);
+
+  const closed = (rows ?? []).filter(b => b.status === "closed").sort((a, b) => a.index - b.index);
+  const current = info.current && info.current.status !== "closed" ? info.current : null;
+  const rtpTotal = closed.reduce((s, b) => s + Number(b.rtpPnl), 0) + (current ? Number(current.rtpPnl) : 0);
+  const sqTotal = closed.reduce((s, b) => s + Number(b.squareoffPnl), 0);
+  const running = bot.status === "running" || bot.status === "idle";
+  const path = closed.length ? [closed[0].startZone, ...closed.map(b => b.endZone ?? "?")] : current ? [current.startZone] : [];
+  const when = (ms: number) => new Date(ms).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const moved = current && bot.lastPrice ? Math.abs(Number(bot.lastPrice) - Number(current.startPrice)) : null;
+
+  return (
+    <section className="basket-route">
+      <div className="route-head">
+        <h4 className="settings-title">Basket Route</h4>
+        <div className="route-totals">
+          <span>RTP PnL <b className={`mono ${pnlClass(rtpTotal)}`}>{fmtPnl(rtpTotal)}</b></span>
+          <span>Square-off PnL <b className={`mono ${pnlClass(sqTotal)}`}>{fmtPnl(sqTotal)}</b></span>
+          <span>Baskets closed <b className="mono">{closed.length}</b></span>
+        </div>
+      </div>
+      {path.length > 0 && (
+        <ol className="route-path" aria-label="Route of the baskets">
+          {path.map((z, i) => (
+            <Fragment key={i}>
+              {i > 0 && <li className="route-arrow" aria-hidden="true">→</li>}
+              <li className={`route-chip${z.startsWith("UB") ? " up" : z.startsWith("LB") ? " down" : ""}${current && i === path.length - 1 ? " now" : ""}`}>{z}</li>
+            </Fragment>
+          ))}
+          {current && running && <><li className="route-arrow" aria-hidden="true">→</li><li className="route-chip live">running…</li></>}
+        </ol>
+      )}
+      {error ? <p className="empty">Could not load the baskets: {error}</p> : !rows ? <p className="empty">Loading baskets…</p> : (
+        <div className="route-table">
+          <table>
+            <thead><tr>
+              <th>#</th><th>Route</th><th>Why closed</th><th>Start → end price</th><th>RTPs</th><th>RTP PnL</th>
+              <th>Square-off</th><th>Square-off PnL</th><th>Basket total</th><th>Closed</th>
+            </tr></thead>
+            <tbody>
+              {closed.map(b => {
+                const total = Number(b.rtpPnl) + Number(b.squareoffPnl);
+                return (
+                  <tr key={b.index}>
+                    <td>{b.index}</td>
+                    <td className="route-cell"><b>{b.startZone}</b> → <b>{b.endZone}</b></td>
+                    <td><small className={`reason-tag ${b.reason ?? ""}`}>{b.reason ? REASON[b.reason] : "—"}</small></td>
+                    <td className="mono">{fmt(b.startPrice)} → {fmt(b.endPrice)}</td>
+                    <td className="mono">{b.roundtrips}</td>
+                    <td className="mono"><b className={pnlClass(b.rtpPnl)}>{fmtPnl(b.rtpPnl)}</b></td>
+                    <td className="mono">{b.squareoffSide
+                      ? <><span className={b.squareoffSide}>{b.squareoffSide.toUpperCase()}</span> {fmt(b.squareoffQty)} @ {fmt(b.squareoffPrice)}</>
+                      : <small>position was 0</small>}</td>
+                    <td className="mono"><b className={pnlClass(b.squareoffPnl)}>{fmtPnl(b.squareoffPnl)}</b></td>
+                    <td className="mono"><b className={pnlClass(total)}>{fmtPnl(total)}</b></td>
+                    <td className="mono">{b.closedAt ? when(b.closedAt) : "—"}</td>
+                  </tr>
+                );
+              })}
+              {current && (
+                <tr className="route-live">
+                  <td>{current.index}</td>
+                  <td className="route-cell"><b>{current.startZone}</b> → <i>{running ? "running" : "stopped"}</i></td>
+                  <td><small className="reason-tag open">{running ? "open" : "not squared off"}</small></td>
+                  <td className="mono">{fmt(current.startPrice)} → {fmt(bot.lastPrice)}{moved !== null && running && <small> ({fmt(Math.max(0, Number(bot.config.basketDistance) - moved))} to next basket)</small>}</td>
+                  <td className="mono">{current.roundtrips}</td>
+                  <td className="mono"><b className={pnlClass(current.rtpPnl)}>{fmtPnl(current.rtpPnl)}</b></td>
+                  <td className="mono"><small>holding {fmt(bot.openExposure)}</small></td>
+                  <td className="mono">—</td>
+                  <td className="mono">—</td>
+                  <td className="mono"><small>since {when(current.startedAt)}</small></td>
+                </tr>
+              )}
+              {!closed.length && !current && <tr><td colSpan={10} className="empty">No baskets yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -295,7 +416,7 @@ function TradeHistory({ bot }: { bot: BotView }) {
   const [rows, setRows] = useState<TradeView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [side, setSide] = useState<"all" | "buy" | "sell">("all");
-  const [role, setRole] = useState<"all" | "entry" | "target">("all");
+  const [role, setRole] = useState<"all" | "entry" | "target" | "squareoff">("all");
   const fillCount = bot.fillSummary.buyCount + bot.fillSummary.sellCount;
   useEffect(() => {
     let cancelled = false;
@@ -332,7 +453,7 @@ function TradeHistory({ bot }: { bot: BotView }) {
           {(["all", "buy", "sell"] as const).map(s => <button key={s} className={side === s ? "on" : ""} aria-pressed={side === s} onClick={() => setSide(s)}>{s === "all" ? "All" : s === "buy" ? "Buy" : "Sell"}</button>)}
         </div>
         <div className="seg" role="group" aria-label="Filter by type">
-          {(["all", "entry", "target"] as const).map(r => <button key={r} className={role === r ? "on" : ""} aria-pressed={role === r} onClick={() => setRole(r)}>{r === "all" ? "All types" : r === "entry" ? "Entries" : "Targets"}</button>)}
+          {(bot.basket ? ["all", "entry", "target", "squareoff"] as const : ["all", "entry", "target"] as const).map(r => <button key={r} className={role === r ? "on" : ""} aria-pressed={role === r} onClick={() => setRole(r)}>{r === "all" ? "All types" : r === "entry" ? "Entries" : r === "target" ? "Targets" : "Square-offs"}</button>)}
         </div>
         <button className="btn ghost small" onClick={downloadCsv}>Download CSV</button>
       </div>
@@ -349,7 +470,7 @@ function TradeHistory({ bot }: { bot: BotView }) {
             <td className="mono">{tradeTime(t.time)}</td>
             <td>{symbol}</td>
             <td className={t.side}>{t.side.toUpperCase()}</td>
-            <td>{t.role === "entry" ? "Entry" : "Target"} · L{t.level > 0 ? `+${t.level}` : t.level}</td>
+            <td>{t.role === "squareoff" ? "Square-off" : <>{t.role === "entry" ? "Entry" : "Target"} · L{t.level > 0 ? `+${t.level}` : t.level}</>}</td>
             <td className="mono">{fmt(t.price)}</td>
             <td className="mono">{fmt(t.qty)}</td>
             <td className="mono">{fmt(t.value)}</td>

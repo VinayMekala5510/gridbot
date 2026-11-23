@@ -1,4 +1,4 @@
-import type { BotConfig, BotStatus, ExchangeId, OrderRole, OrderStatus, Side } from "../../shared/types";
+import type { BasketReason, BotConfig, BotStatus, ExchangeId, OrderRole, OrderStatus, Side } from "../../shared/types";
 
 export interface AccountRecord {
   id: number;
@@ -18,6 +18,8 @@ export interface BotRecord {
   entryFilledQty: string;
   roundtrips: number;
   realizedPnl: string;
+  /** basket-grid: total PnL of basket square-offs. */
+  squareoffPnl: string;
   fees: string;
   lastPrice: string | null;
   /** Exchange fill-history cursor (ms) used to resume live bots after a restart. */
@@ -78,6 +80,29 @@ export interface RoundtripRecord {
   time: number;
 }
 
+/** One basket of a basket-grid bot (see BasketView). */
+export interface BasketRecord {
+  id: number;
+  botId: number;
+  index: number;
+  status: "open" | "closing" | "closed";
+  startPrice: string;
+  startZone: string;
+  endPrice: string | null;
+  endZone: string | null;
+  reason: BasketReason | null;
+  roundtrips: number;
+  rtpPnl: string;
+  squareoffSide: Side | null;
+  squareoffQty: string;
+  squareoffPrice: string | null;
+  squareoffPnl: string;
+  startedAt: number;
+  closedAt: number | null;
+}
+
+export type BasketPatch = Partial<Omit<BasketRecord, "id" | "botId" | "index" | "startPrice" | "startZone" | "startedAt">>;
+
 export interface EventRecord {
   botId: number | null;
   level: "info" | "warn" | "error";
@@ -122,6 +147,10 @@ export interface Store {
 
   insertRoundtrip(r: RoundtripRecord): Promise<void>;
   recentRoundtrips(botId: number, limit: number): Promise<RoundtripRecord[]>;
+  createBasket(b: Omit<BasketRecord, "id">): Promise<BasketRecord>;
+  updateBasket(id: number, patch: BasketPatch): Promise<void>;
+  /** Baskets of a bot, newest first. */
+  listBaskets(botId: number, limit: number): Promise<BasketRecord[]>;
   insertEvent(e: EventRecord): Promise<void>;
   recentEvents(botId: number, limit: number): Promise<EventRecord[]>;
 

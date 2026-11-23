@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import mysql, { type Pool, type RowDataPacket, type ResultSetHeader } from "mysql2/promise";
 import type { BotConfig, BotStatus, OrderStatus } from "../../shared/types";
 import type {
-  AccountRecord, AlertRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
+  AccountRecord, AlertRecord, BasketPatch, BasketRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
   OrderPatch, OrderRecord, RoundtripRecord, Store,
 } from "./types";
 
@@ -114,11 +114,39 @@ const SCHEMA = [
     created_at DATETIME(3) NOT NULL,
     deleted_at DATETIME(3) NULL
   ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS baskets (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    bot_id INT UNSIGNED NOT NULL,
+    idx INT NOT NULL,
+    status VARCHAR(10) NOT NULL,
+    start_price DECIMAL(38,18) NOT NULL,
+    start_zone VARCHAR(20) NOT NULL,
+    end_price DECIMAL(38,18) NULL,
+    end_zone VARCHAR(20) NULL,
+    reason VARCHAR(20) NULL,
+    roundtrips INT NOT NULL DEFAULT 0,
+    rtp_pnl DECIMAL(38,18) NOT NULL DEFAULT 0,
+    squareoff_side VARCHAR(4) NULL,
+    squareoff_qty DECIMAL(38,18) NOT NULL DEFAULT 0,
+    squareoff_price DECIMAL(38,18) NULL,
+    squareoff_pnl DECIMAL(38,18) NOT NULL DEFAULT 0,
+    started_at DATETIME(3) NOT NULL,
+    closed_at DATETIME(3) NULL,
+    UNIQUE KEY uq_baskets_bot_idx (bot_id, idx)
+  ) ENGINE=InnoDB`,
   `CREATE TABLE IF NOT EXISTS app_settings (
     name VARCHAR(100) PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at DATETIME(3) NOT NULL
   ) ENGINE=InnoDB`,
+];
+
+/** Columns added after the first release; created on start-up when missing. */
+const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: "bots", column: "grid_model", ddl: "VARCHAR(20) NOT NULL DEFAULT 'step-grid'" },
+  { table: "bots", column: "total_distance", ddl: "DECIMAL(38,18) NULL" },
+  { table: "bots", column: "basket_distance", ddl: "DECIMAL(38,18) NULL" },
+  { table: "bots", column: "squareoff_pnl", ddl: "DECIMAL(38,18) NOT NULL DEFAULT 0" },
 ];
 
 type Row = RowDataPacket & Record<string, unknown>;
@@ -135,12 +163,14 @@ function botFromRow(r: Row): BotRecord {
     spread: dec(r.spread), targetSpread: dec(r.target_spread), steps: Number(r.steps),
     stepQty: dec(r.step_qty), mmQty: dec(r.mm_qty), upperLimit: dec(r.upper_limit),
     lowerLimit: dec(r.lower_limit), entryPrice: dec(r.entry_price),
+    gridModel: (r.grid_model ?? "step-grid") as BotConfig["gridModel"],
+    totalDistance: decOrNull(r.total_distance), basketDistance: decOrNull(r.basket_distance),
   };
   return {
     id: Number(r.id), config, status: r.status as BotStatus,
     statusReason: r.status_reason === null ? null : String(r.status_reason),
     entryFilledQty: dec(r.entry_filled_qty), roundtrips: Number(r.roundtrips),
-    realizedPnl: dec(r.realized_pnl), fees: dec(r.fees), lastPrice: decOrNull(r.last_price),
+    realizedPnl: dec(r.realized_pnl), squareoffPnl: dec(r.squareoff_pnl ?? 0), fees: dec(r.fees), lastPrice: decOrNull(r.last_price),
     fillCursor: Number(r.fill_cursor), createdAt: ms(r.created_at), stoppedAt: msOrNull(r.stopped_at),
   };
 }
@@ -167,9 +197,26 @@ function fillFromRow(r: Row): FillRecord {
 
 const BOT_COLUMNS: Record<keyof BotPatch, string> = {
   status: "status", statusReason: "status_reason", entryFilledQty: "entry_filled_qty",
-  roundtrips: "roundtrips", realizedPnl: "realized_pnl", fees: "fees", lastPrice: "last_price",
+  roundtrips: "roundtrips", realizedPnl: "realized_pnl", squareoffPnl: "squareoff_pnl", fees: "fees", lastPrice: "last_price",
   fillCursor: "fill_cursor", stoppedAt: "stopped_at",
 };
+const BASKET_COLUMNS: Record<keyof BasketPatch, string> = {
+  status: "status", endPrice: "end_price", endZone: "end_zone", reason: "reason", roundtrips: "roundtrips",
+  rtpPnl: "rtp_pnl", squareoffSide: "squareoff_side", squareoffQty: "squareoff_qty", squareoffPrice: "squareoff_price",
+  squareoffPnl: "squareoff_pnl", closedAt: "closed_at",
+};
+
+function basketFromRow(r: Row): BasketRecord {
+  return {
+    id: Number(r.id), botId: Number(r.bot_id), index: Number(r.idx), status: r.status as BasketRecord["status"],
+    startPrice: dec(r.start_price), startZone: String(r.start_zone), endPrice: decOrNull(r.end_price),
+    endZone: r.end_zone === null ? null : String(r.end_zone), reason: (r.reason ?? null) as BasketRecord["reason"],
+    roundtrips: Number(r.roundtrips), rtpPnl: dec(r.rtp_pnl),
+    squareoffSide: (r.squareoff_side ?? null) as BasketRecord["squareoffSide"], squareoffQty: dec(r.squareoff_qty),
+    squareoffPrice: decOrNull(r.squareoff_price), squareoffPnl: dec(r.squareoff_pnl),
+    startedAt: ms(r.started_at), closedAt: msOrNull(r.closed_at),
+  };
+}
 const ORDER_COLUMNS: Record<keyof OrderPatch, string> = {
   filledQty: "filled_qty", avgFillPrice: "avg_fill_price", status: "status",
   exchangeOrderId: "exchange_order_id", error: "error", filledAt: "filled_at",
@@ -183,7 +230,7 @@ function patchSql<T extends object>(patch: T, columns: Record<string, string>) {
     const column = columns[key];
     if (!column) throw new Error(`Unknown column for ${key}`);
     sets.push(`${column} = ?`);
-    values.push(key === "stoppedAt" || key === "filledAt" ? date(value as number | null) : value);
+    values.push(key === "stoppedAt" || key === "filledAt" || key === "closedAt" ? date(value as number | null) : value);
   }
   return { sets, values };
 }
@@ -201,6 +248,12 @@ export class MysqlStore implements Store {
 
   async init() {
     for (const sql of SCHEMA) await this.pool.query(sql);
+    const [cols] = await this.pool.query<Row[]>(
+      "SELECT TABLE_NAME AS t, COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()");
+    const have = new Set(cols.map(r => `${String(r.t)}.${String(r.c)}`));
+    for (const a of ADDED_COLUMNS) {
+      if (!have.has(`${a.table}.${a.column}`)) await this.pool.query(`ALTER TABLE ${a.table} ADD COLUMN ${a.column} ${a.ddl}`);
+    }
   }
   async close() { await this.pool.end(); }
 
@@ -236,10 +289,11 @@ export class MysqlStore implements Store {
     const now = Date.now();
     const [res] = await this.pool.execute<ResultSetHeader>(
       `INSERT INTO bots (name, exchange, mode, account_id, symbol, spread, target_spread, steps, step_qty, mm_qty,
-        upper_limit, lower_limit, entry_price, status, fill_cursor, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        upper_limit, lower_limit, entry_price, grid_model, total_distance, basket_distance, status, fill_cursor, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [c.name, c.exchange, c.mode, c.accountId, c.symbol, c.spread, c.targetSpread, c.steps, c.stepQty, c.mmQty,
-        c.upperLimit, c.lowerLimit, c.entryPrice, status, now, new Date(now)]);
+        c.upperLimit, c.lowerLimit, c.entryPrice, c.gridModel ?? "step-grid", c.totalDistance ?? null, c.basketDistance ?? null,
+        status, now, new Date(now)]);
     const [rows] = await this.pool.execute<Row[]>("SELECT * FROM bots WHERE id = ?", [res.insertId]);
     return botFromRow(rows[0]);
   }
@@ -329,6 +383,25 @@ export class MysqlStore implements Store {
       entryPrice: dec(r.entry_price), exitPrice: dec(r.exit_price), qty: dec(r.qty), pnl: dec(r.pnl),
       time: ms(r.completed_at),
     }));
+  }
+  async createBasket(b: Omit<BasketRecord, "id">) {
+    const [res] = await this.pool.execute<ResultSetHeader>(
+      `INSERT INTO baskets (bot_id, idx, status, start_price, start_zone, end_price, end_zone, reason, roundtrips, rtp_pnl,
+        squareoff_side, squareoff_qty, squareoff_price, squareoff_pnl, started_at, closed_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [b.botId, b.index, b.status, b.startPrice, b.startZone, b.endPrice, b.endZone, b.reason, b.roundtrips, b.rtpPnl,
+        b.squareoffSide, b.squareoffQty, b.squareoffPrice, b.squareoffPnl, new Date(b.startedAt), date(b.closedAt)]);
+    return { ...b, id: res.insertId };
+  }
+  async updateBasket(id: number, patch: BasketPatch) {
+    const { sets, values } = patchSql(patch, BASKET_COLUMNS);
+    if (!sets.length) return;
+    await this.pool.execute(`UPDATE baskets SET ${sets.join(", ")} WHERE id = ?`, [...values, id] as never[]);
+  }
+  async listBaskets(botId: number, limit: number) {
+    const [rows] = await this.pool.query<Row[]>(
+      "SELECT * FROM baskets WHERE bot_id = ? ORDER BY idx DESC LIMIT ?", [botId, limit]);
+    return rows.map(basketFromRow);
   }
   async insertEvent(e: EventRecord) {
     await this.pool.execute("INSERT INTO events (bot_id, level, message, created_at) VALUES (?,?,?,?)",

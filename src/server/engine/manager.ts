@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import { exchangeInfo } from "../../shared/exchanges";
-import type { AccountView, BotConfig, ExchangeId, RoundtripView, Snapshot, TradeView } from "../../shared/types";
+import { STOPPED_STATUSES, basketCount, gridModelOf } from "../../shared/types";
+import type { AccountView, BasketView, BotConfig, ExchangeId, RoundtripView, Snapshot, TradeView } from "../../shared/types";
 import { decryptSecret, encryptSecret, maskKey } from "../crypto";
 import { HyperliquidAccount, HyperliquidAdapter, validateAddress, validatePrivateKey, verifyHyperliquidKey } from "../exchanges/hyperliquid";
 import { BinanceAccount, BinanceAdapter, validateBinanceKey, verifyBinanceKey } from "../exchanges/binance";
@@ -9,7 +10,7 @@ import { PaperAdapter } from "../exchanges/paper";
 import { fetchPrice } from "../exchanges/prices";
 import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
 import type { AccountRecord, BotRecord, Store } from "../store/types";
-import { GridBot, MAX_OPEN_PER_SIDE, message } from "./grid";
+import { GridBot, MAX_OPEN_PER_SIDE, basketView, message } from "./grid";
 import { AlertMonitor } from "../alerts";
 import { TelegramNotifier, alertMessage } from "../telegram";
 
@@ -199,6 +200,8 @@ export class BotManager {
   async createBot(input: BotConfig): Promise<number> {
     if (this.frozen) throw new UserError("Master kill switch is in progress");
     const config: BotConfig = { ...input, name: input.name.trim(), symbol: input.symbol.trim().toUpperCase() };
+    config.gridModel = gridModelOf(config);
+    if (config.gridModel === "step-grid") { config.totalDistance = null; config.basketDistance = null; }
     validateNumbers(config);
     if ([...this.bots.values()].some(b => b.rec.config.name.toLowerCase() === config.name.toLowerCase())) {
       throw new UserError(`A bot named "${config.name}" already exists`);
@@ -222,7 +225,7 @@ export class BotManager {
     const adapter = this.adapterFor(config, account);
     const draft: BotRecord = {
       id: 0, config, status: "idle", statusReason: null, entryFilledQty: "0", roundtrips: 0, realizedPnl: "0",
-      fees: "0", lastPrice: null, fillCursor: Date.now(), createdAt: Date.now(), stoppedAt: null,
+      squareoffPnl: "0", fees: "0", lastPrice: null, fillCursor: Date.now(), createdAt: Date.now(), stoppedAt: null,
     };
     let levels;
     let price: Decimal;
@@ -291,6 +294,12 @@ export class BotManager {
     });
   }
 
+  /** Every basket of a basket-grid bot, newest first (the Basket Route). */
+  async baskets(id: number, limit = 2000): Promise<BasketView[]> {
+    if (!this.bots.has(id)) throw new UserError("Bot not found");
+    return (await this.store.listBaskets(id, limit)).map(basketView);
+  }
+
   async roundtrips(id: number, limit = 2000): Promise<RoundtripView[]> {
     if (!this.bots.has(id)) throw new UserError("Bot not found");
     return (await this.store.recentRoundtrips(id, limit)).map(r => ({
@@ -317,7 +326,7 @@ export class BotManager {
   async killAll(): Promise<{ bots: number; accountCancels: { account: string; canceled: number; failed: number; error?: string }[] }> {
     this.frozen = true;
     try {
-      const active = [...this.bots.values()].filter(b => !["killed", "halted_volume_cap", "halted_limit_breach", "error"].includes(b.rec.status));
+      const active = [...this.bots.values()].filter(b => !STOPPED_STATUSES.includes(b.rec.status));
       await Promise.allSettled(active.map(b => b.kill("Stopped by the MASTER KILL SWITCH")));
       const accountCancels = [];
       for (const account of await this.store.listAccounts()) {
@@ -347,6 +356,7 @@ export class BotManager {
       totals: {
         netPnl: bots.reduce((s, b) => s.plus(b.netPnl), new Decimal(0)).toFixed(),
         rtpPnl: sum(bots.map(b => b.realizedPnl)),
+        squareoffPnl: sum(bots.map(b => b.squareoffPnl)),
         realizedPnl: sum(bots.map(b => b.realizedPnl)),
         unrealizedPnl: sum(bots.map(b => b.unrealizedPnl)),
         fees: sum(bots.map(b => b.fees)),
@@ -394,6 +404,18 @@ function validateNumbers(c: BotConfig) {
   if (targetSpread.gte(range)) {
     throw new UserError(`Target spread ${targetSpread.toFixed()} is wider than the whole price range ${lower.toFixed()}–${upper.toFixed()} (${range.toFixed()}). ` +
       `A sell at ${entry.plus(spread).toFixed()} would get its buy target at ${entry.plus(spread).minus(targetSpread).toFixed()}. Check the Target spread field.`);
+  }
+  if (gridModelOf(c) === "basket-grid") {
+    const total = num("Total distance", c.totalDistance ?? "");
+    const basket = num("Basket distance", c.basketDistance ?? "");
+    if (basket.gt(total)) throw new UserError("Basket distance must not be larger than the total distance");
+    if (!spread.lt(basket)) throw new UserError(`Basket distance ${basket.toFixed()} must be larger than the spread ${spread.toFixed()}, or no grid level fits inside a basket`);
+    const n = basketCount(c);
+    const perBasket = mmQty.div(n);
+    if (perBasket.lt(stepQty)) {
+      throw new UserError(`Each basket gets Market making qty ÷ ${n} baskets = ${perBasket.toSignificantDigits(8).toFixed()}, ` +
+        `less than one per-step quantity ${stepQty.toFixed()}. Raise Market making qty or the basket distance`);
+    }
   }
 }
 

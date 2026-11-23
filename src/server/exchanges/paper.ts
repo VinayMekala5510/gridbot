@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import { randomUUID } from "node:crypto";
 import type { Side } from "../../shared/types";
-import type { CancelResult, ExchangeAdapter, ExchangeFill, PlaceRequest, TrackedOrder } from "./types";
+import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
 
 /**
  * Simulated venue. Uses a real (or injected) price source; a resting limit
@@ -22,6 +22,14 @@ export class PaperAdapter implements ExchangeAdapter {
     return { exchangeOrderId: `paper-${randomUUID()}` };
   }
 
+  /** Market orders fill completely at the market price on the next fill check. */
+  private market = new Set<string>();
+  async placeMarket(_req: MarketRequest) {
+    const id = `paper-mkt-${randomUUID()}`;
+    this.market.add(id);
+    return { exchangeOrderId: id };
+  }
+
   async lookupByClientId(_symbol: string, _clientId: string) { return null; }
 
   async cancel(_symbol: string, ids: string[]): Promise<CancelResult> {
@@ -34,12 +42,14 @@ export class PaperAdapter implements ExchangeAdapter {
     const now = Date.now();
     const fills: ExchangeFill[] = [];
     for (const order of open) {
-      const crossed = order.side === "buy" ? price.lte(order.price) : price.gte(order.price);
+      const isMarket = this.market.has(order.exchangeOrderId);
+      const crossed = isMarket || (order.side === "buy" ? price.lte(order.price) : price.gte(order.price));
       const remaining = order.qty.minus(order.filledQty);
       if (!crossed || remaining.lte(0)) continue;
+      if (isMarket) this.market.delete(order.exchangeOrderId);
       fills.push({
         exchangeOrderId: order.exchangeOrderId, tradeId: `${order.exchangeOrderId}:fill`,
-        price: order.price, qty: remaining, fee: new Decimal(0), time: now,
+        price: isMarket ? price : order.price, qty: remaining, fee: new Decimal(0), time: now,
       });
     }
     return { fills, cursor: now };

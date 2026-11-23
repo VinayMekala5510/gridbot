@@ -1,8 +1,9 @@
 import Decimal from "decimal.js";
 import { randomBytes } from "node:crypto";
-import type { BotStatus, BotView, EventView, OrderRole, OrderView, Side } from "../../shared/types";
+import { STOPPED_STATUSES, basketCount, gridModelOf } from "../../shared/types";
+import type { BasketReason, BasketView, BotStatus, BotView, EventView, OrderRole, OrderView, Side } from "../../shared/types";
 import type { ExchangeAdapter, ExchangeFill } from "../exchanges/types";
-import type { BotRecord, FillRecord, OrderRecord, RoundtripRecord, Store } from "../store/types";
+import type { BasketRecord, BotRecord, FillRecord, OrderRecord, RoundtripRecord, Store } from "../store/types";
 
 const D = Decimal.clone({ precision: 40 });
 type Dec = Decimal;
@@ -11,7 +12,16 @@ const ZERO = new D(0);
 /** Entry orders resting at once per side: 3 buys + 3 sells, so at most 6 per bot. */
 export const MAX_OPEN_PER_SIDE = 3;
 
-const STOPPED: BotStatus[] = ["killed", "halted_volume_cap", "halted_limit_breach", "error"];
+const STOPPED: BotStatus[] = STOPPED_STATUSES;
+
+const REASON_TEXT: Record<BasketReason, string> = {
+  distance_up: "basket distance reached ↑",
+  distance_down: "basket distance reached ↓",
+  qty_full: "qty full",
+  total_distance: "total distance reached",
+};
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 export interface GridBotOptions {
   tickMs?: number;
@@ -49,7 +59,9 @@ export class GridBot {
   private recentFills: FillRecord[] = [];
   private recentRoundtrips: RoundtripRecord[] = [];
   /** Entries that just filled and whose target is being placed (counted as open exposure). */
-  private awaitingTarget = new Map<number, Dec>();
+  private awaitingTarget = new Map<number, OrderRecord>();
+  /** basket-grid: the basket being traded (its start price is the grid's anchor). */
+  private basket: BasketRecord | null = null;
   private events: EventView[] = [];
   private summary = { buy: { count: 0, qty: ZERO, notional: ZERO }, sell: { count: 0, qty: ZERO, notional: ZERO } };
   private levels: Level[] = [];
@@ -85,10 +97,13 @@ export class GridBot {
   /** Inverse contract (qty in USD, e.g. Deribit BTC-PERPETUAL). */
   get isInverse() { return this.inverse; }
 
-  /** Computes the grid levels (rounded to the venue's tick rules) inside the limits. */
-  static async computeLevels(rec: BotRecord, adapter: ExchangeAdapter): Promise<Level[]> {
+  /**
+   * Computes the grid levels (rounded to the venue's tick rules) inside the limits, around the
+   * bot entry price (step-grid) or the current basket's start price (basket-grid).
+   */
+  static async computeLevels(rec: BotRecord, adapter: ExchangeAdapter, anchor?: Dec): Promise<Level[]> {
     const c = rec.config;
-    const entry = new D(c.entryPrice), spread = new D(c.spread);
+    const entry = anchor ?? new D(c.entryPrice), spread = new D(c.spread);
     const lower = new D(c.lowerLimit), upper = new D(c.upperLimit);
     const levels: Level[] = [];
     for (let i = 1; i <= c.steps; i++) {
@@ -105,7 +120,16 @@ export class GridBot {
 
   /** Loads levels and persisted state. Call once before start(). */
   async load(): Promise<void> {
-    this.levels = await GridBot.computeLevels(this.rec, this.adapter);
+    if (this.isBasket) {
+      this.basket = (await this.store.listBaskets(this.id, 1))[0] ?? null;
+      const active = !STOPPED.includes(this.rec.status);
+      if (!this.basket && active) this.basket = await this.openBasket(1, new D(this.rec.config.entryPrice));
+      else if (this.basket?.status === "closed" && active) {
+        // Restarted right after a square-off: the next basket starts where the last one ended.
+        this.basket = await this.openBasket(this.basket.index + 1, new D(this.basket.endPrice ?? this.rec.config.entryPrice));
+      }
+    }
+    this.levels = await GridBot.computeLevels(this.rec, this.adapter, this.basket ? new D(this.basket.startPrice) : undefined);
     this.inverse = this.adapter.isInverse ? await this.adapter.isInverse(this.symbol) : false;
     const open = await this.store.listOrders(this.id, ["pending", "open"]);
     for (const o of open) this.orders.set(o.id, o);
@@ -148,6 +172,11 @@ export class GridBot {
   /** One full cycle. Exposed for tests. */
   async tick(): Promise<void> {
     if (this.isStopped || this.isFrozen()) return;
+    if (this.basket?.status === "closing") {
+      await this.halt("error", `The server restarted in the middle of the basket #${this.basket.index} square-off. ` +
+        "Check this bot's position on the exchange and close what is left by hand");
+      return;
+    }
     await this.reconcilePending();
 
     let price: Dec;
@@ -173,7 +202,10 @@ export class GridBot {
 
     await this.syncFills(true);
     if (this.isStopped || this.isFrozen()) return;
-    if (this.capReached()) {
+    if (this.isBasket) {
+      await this.basketRules(price);
+      if (this.isStopped || this.isFrozen()) return;
+    } else if (this.capReached()) {
       await this.halt("halted_volume_cap", this.capMessage());
       return;
     }
@@ -219,10 +251,15 @@ export class GridBot {
 
     for (const order of completed) {
       if (order.role === "target") await this.completeRoundtrip(order);
-      else this.awaitingTarget.set(order.id, new D(order.filledQty));
+      else if (order.role === "entry") this.awaitingTarget.set(order.id, order);
     }
     if (!react) return;
     if (this.capReached()) {
+      if (this.isBasket) {
+        // basket-grid: a full basket is squared off at once and the next basket starts.
+        if (this.rec.lastPrice) await this.squareOff("qty_full", new D(this.rec.lastPrice), new D(this.rec.lastPrice), true);
+        return;
+      }
       await this.halt("halted_volume_cap", this.capMessage());
       return;
     }
@@ -264,7 +301,7 @@ export class GridBot {
       filledQty: order.filledQty, avgFillPrice: order.avgFillPrice, status: order.status, filledAt: order.filledAt,
     });
     await this.store.updateBot(this.id, { fees: this.rec.fees, entryFilledQty: this.rec.entryFilledQty });
-    this.info(`${order.role === "entry" ? "Entry" : "Target"} ${order.side} L${order.level} filled ${fill.qty.toFixed()} @ ${fill.price.toFixed()}${done ? "" : " (partial)"}`);
+    this.info(`${order.role === "entry" ? "Entry" : order.role === "target" ? "Target" : "Square-off"} ${order.side} L${order.level} filled ${fill.qty.toFixed()} @ ${fill.price.toFixed()}${done ? "" : " (partial)"}`);
     return done;
   }
 
@@ -284,6 +321,11 @@ export class GridBot {
     await this.store.insertRoundtrip(roundtrip);
     this.recentRoundtrips = [roundtrip, ...this.recentRoundtrips].slice(0, 50);
     await this.store.updateBot(this.id, { roundtrips: this.rec.roundtrips, realizedPnl: this.rec.realizedPnl });
+    if (this.basket && this.basket.status !== "closed") {
+      this.basket.roundtrips++;
+      this.basket.rtpPnl = new D(this.basket.rtpPnl).plus(pnl).toDecimalPlaces(18).toFixed();
+      await this.store.updateBasket(this.basket.id, { roundtrips: this.basket.roundtrips, rtpPnl: this.basket.rtpPnl });
+    }
     this.info(`Roundtrip #${this.rec.roundtrips} on L${target.level}: PnL ${pnl.toSignificantDigits(8).toFixed()}`);
   }
 
@@ -297,13 +339,18 @@ export class GridBot {
     for (const o of this.orders.values()) {
       qty = o.role === "entry" ? qty.plus(o.filledQty) : qty.plus(new D(o.qty).minus(o.filledQty));
     }
-    for (const q of this.awaitingTarget.values()) qty = qty.plus(q);
+    for (const o of this.awaitingTarget.values()) qty = qty.plus(o.filledQty);
     return qty;
   }
 
-  /** All steps in use: less than one step of room left under Market Making Qty. */
+  /** Ceiling on steps in use: Market making qty (step-grid) or one basket's share of it (basket-grid). */
+  private capQty(): Dec {
+    return this.isBasket ? this.basketQty() : new D(this.rec.config.mmQty);
+  }
+
+  /** All steps in use: less than one step of room left under the ceiling. */
   private capReached(): boolean {
-    return new D(this.rec.config.mmQty).minus(this.openExposure()).lt(this.rec.config.stepQty);
+    return this.capQty().minus(this.openExposure()).lt(this.rec.config.stepQty);
   }
 
   private capMessage(): string {
@@ -360,7 +407,7 @@ export class GridBot {
     const dist = (p: string | Dec) => new D(p).minus(price).abs();
     const busy = new Set([...this.orders.values()].map(o => o.level));
     const halfSpread = new D(this.rec.config.spread).div(2);
-    const canRefill = new D(this.rec.config.mmQty).minus(this.openExposure()).gte(this.rec.config.stepQty);
+    const canRefill = this.capQty().minus(this.openExposure()).gte(this.rec.config.stepQty);
     const excess: OrderRecord[] = [];
     let swaps = 0;
     for (const side of ["buy", "sell"] as const) {
@@ -416,7 +463,7 @@ export class GridBot {
     // filled entry volume still has room for at least one more step; the bot halts
     // once filled volume reaches Market making qty (simultaneous fills may overshoot
     // by up to the open entries).
-    const room = new D(this.rec.config.mmQty).minus(this.openExposure());
+    const room = this.capQty().minus(this.openExposure());
     const stepQty = await this.adapter.roundQty(this.symbol, new D(this.rec.config.stepQty));
     // Only a window of levels rests at once: at most MAX_OPEN_PER_SIDE buy entries and as
     // many sell entries. When one fills, the next free level on that side is placed.
@@ -537,7 +584,23 @@ export class GridBot {
   /** Cancels every open order, records last-moment fills and sets the final status. */
   private async finish(status: BotStatus, reason: string) {
     if (STOPPED.includes(this.rec.status)) return;
-    const open = [...this.orders.values()];
+    const stillOpen = await this.cancelOrders([...this.orders.values()]);
+    this.awaitingTarget.clear();
+    const note = stillOpen.size ? ` WARNING: ${stillOpen.size} order(s) could not be canceled — check the exchange.` : "";
+    this.rec.status = status;
+    this.rec.statusReason = `${reason}.${note}`.replace(/\.\./gu, ".");
+    this.rec.stoppedAt = Date.now();
+    await this.store.updateBot(this.id, {
+      status, statusReason: this.rec.statusReason, stoppedAt: this.rec.stoppedAt, lastPrice: this.rec.lastPrice,
+    });
+    this.event(stillOpen.size || status === "error" ? "error" : "warn", this.rec.statusReason);
+  }
+
+  /**
+   * Cancels the given orders (3 tries), records fills that landed before the cancel took effect
+   * and marks the rest canceled. Returns the exchange ids that could not be canceled.
+   */
+  private async cancelOrders(open: OrderRecord[]): Promise<Set<string>> {
     const live = open.filter(o => o.exchangeOrderId);
     let failed: { exchangeOrderId: string; error: string }[] = [];
     let ids = live.map(o => o.exchangeOrderId!);
@@ -549,7 +612,7 @@ export class GridBot {
         failed = ids.map(id => ({ exchangeOrderId: id, error: message(err) }));
       }
       ids = failed.map(f => f.exchangeOrderId);
-      if (ids.length) await new Promise(r => setTimeout(r, 500 * attempt));
+      if (ids.length) await sleep(500 * attempt);
     }
     for (const f of failed) this.event("error", `Cancel failed for exchange order ${f.exchangeOrderId}: ${f.error}. Retrying in the background.`);
     // Live venues: fills that landed before the cancel took effect still count.
@@ -557,7 +620,6 @@ export class GridBot {
     if (this.adapter.live) {
       try { await this.syncFills(false, live); } catch (err) { this.warn(`Final fill check failed: ${message(err)}`); }
     }
-
     const stillOpen = new Set(ids);
     for (const order of open) {
       if (order.status === "filled" || (order.exchangeOrderId && stillOpen.has(order.exchangeOrderId))) continue;
@@ -565,15 +627,181 @@ export class GridBot {
       this.orders.delete(order.id);
       await this.store.updateOrder(order.id, { status: "canceled" });
     }
-    this.awaitingTarget.clear();
-    const note = stillOpen.size ? ` WARNING: ${stillOpen.size} order(s) could not be canceled — check the exchange.` : "";
-    this.rec.status = status;
-    this.rec.statusReason = `${reason}.${note}`.replace(/\.\./gu, ".");
-    this.rec.stoppedAt = Date.now();
-    await this.store.updateBot(this.id, {
-      status, statusReason: this.rec.statusReason, stoppedAt: this.rec.stoppedAt, lastPrice: this.rec.lastPrice,
+    return stillOpen;
+  }
+
+  // ── Baskets (basket-grid) ────────────────────────────────────────────
+
+  get isBasket() { return gridModelOf(this.rec.config) === "basket-grid"; }
+
+  /** Quantity each basket may hold: Market making qty / number of baskets. */
+  basketQty(): Dec {
+    return new D(this.rec.config.mmQty).div(basketCount(this.rec.config));
+  }
+
+  /**
+   * Route label of a price, in steps of the basket distance from the bot entry price:
+   * Start at the entry price, UB1 up to one basket distance above it, UB2 the next, …;
+   * LB1, LB2, … below it.
+   */
+  zoneOf(price: Dec): string {
+    const diff = price.minus(this.rec.config.entryPrice);
+    if (diff.isZero()) return "Start";
+    const n = diff.abs().div(this.rec.config.basketDistance ?? 1).ceil().toNumber();
+    return `${diff.gt(0) ? "UB" : "LB"}${n}`;
+  }
+
+  private openBasket(index: number, start: Dec): Promise<BasketRecord> {
+    return this.store.createBasket({
+      botId: this.id, index, status: "open", startPrice: start.toFixed(), startZone: this.zoneOf(start),
+      endPrice: null, endZone: null, reason: null, roundtrips: 0, rtpPnl: "0",
+      squareoffSide: null, squareoffQty: "0", squareoffPrice: null, squareoffPnl: "0", startedAt: Date.now(), closedAt: null,
     });
-    this.event(stillOpen.size || status === "error" ? "error" : "warn", this.rec.statusReason);
+  }
+
+  /**
+   * Checked every tick after fills are recorded:
+   * 1. price reached the total distance from the entry price → square off and stop the bot;
+   * 2. price moved the basket distance from the basket's start → square off, next basket starts
+   *    one basket distance further (several if the price jumped);
+   * 3. the basket's quantity is full (all its steps in use) → square off, next basket starts at the price.
+   */
+  private async basketRules(price: Dec) {
+    const c = this.rec.config, b = this.basket;
+    if (!b || b.status !== "open") return;
+    const fromEntry = price.minus(c.entryPrice).abs();
+    if (fromEntry.gte(c.totalDistance ?? Infinity)) {
+      if (await this.squareOff("total_distance", price, price, false)) {
+        await this.halt("halted_total_distance",
+          `Total distance reached: price ${price.toFixed()} is ${fromEntry.toFixed()} from the entry price ${c.entryPrice} ` +
+          `(total distance ${c.totalDistance}). Basket #${b.index} was squared off`);
+      }
+      return;
+    }
+    const d = new D(c.basketDistance ?? Infinity);
+    const move = price.minus(b.startPrice);
+    if (move.abs().gte(d)) {
+      const end = new D(b.startPrice).plus(d.times(move.abs().div(d).floor()).times(move.s));
+      await this.squareOff(move.gt(0) ? "distance_up" : "distance_down", price, end, true);
+      return;
+    }
+    if (this.capReached()) await this.squareOff("qty_full", price, price, true);
+  }
+
+  /**
+   * Closes the current basket: cancels all its orders, closes its net position with a market
+   * order, books the square-off PnL, then (when `openNext`) starts the next basket at `end`
+   * with a fresh, empty position. Returns false when the bot had to stop instead.
+   */
+  private async squareOff(reason: BasketReason, price: Dec, end: Dec, openNext: boolean): Promise<boolean> {
+    const b = this.basket;
+    if (!b || b.status !== "open") return false;
+    b.status = "closing";
+    await this.store.updateBasket(b.id, { status: "closing" });
+
+    // 1. Cancel every order of this basket; fills that landed first still count.
+    await this.reconcilePending();
+    const open = [...this.orders.values()];
+    const stillOpen = await this.cancelOrders(open);
+    if (stillOpen.size) {
+      await this.halt("error", `Basket #${b.index} square-off stopped: ${stillOpen.size} order(s) could not be canceled. Check the position on the exchange`);
+      return false;
+    }
+
+    // 2. What the basket still holds: filled entries whose target has not (fully) filled.
+    const lots: { side: Side; qty: Dec; price: Dec }[] = [];
+    for (const o of open) {
+      if (o.status === "filled") continue;
+      if (o.role === "entry" && new D(o.filledQty).gt(0)) {
+        lots.push({ side: o.side, qty: new D(o.filledQty), price: new D(o.avgFillPrice ?? o.price) });
+      } else if (o.role === "target") {
+        const left = new D(o.qty).minus(o.filledQty);
+        if (left.gt(0)) lots.push({ side: o.side === "sell" ? "buy" : "sell", qty: left, price: new D(o.refPrice ?? o.price) });
+      }
+    }
+    for (const e of this.awaitingTarget.values()) lots.push({ side: e.side, qty: new D(e.filledQty), price: new D(e.avgFillPrice ?? e.price) });
+    this.awaitingTarget.clear();
+    const net = lots.reduce((s, l) => (l.side === "buy" ? s.plus(l.qty) : s.minus(l.qty)), ZERO);
+
+    // 3. Close the net position at market (up to 3 tries for any part that did not execute).
+    const side: Side = net.gt(0) ? "sell" : "buy";
+    const qty = await this.adapter.roundQty(this.symbol, net.abs());
+    let filled = ZERO, notional = ZERO;
+    for (let attempt = 1; attempt <= 3 && filled.lt(qty); attempt++) {
+      const order = await this.marketOrder(side, qty.minus(filled), price);
+      if (order) {
+        filled = filled.plus(order.filledQty);
+        notional = notional.plus(new D(order.filledQty).times(order.avgFillPrice ?? price));
+      }
+      if (filled.lt(qty) && attempt < 3) await sleep(1000 * attempt);
+    }
+    if (filled.lt(qty)) {
+      await this.halt("error", `Basket #${b.index} square-off incomplete: ${side.toUpperCase()} ${qty.minus(filled).toFixed()} could not be executed at market. Close it on the exchange`);
+      return false;
+    }
+    const closePrice = filled.gt(0) ? notional.div(filled) : price;
+
+    // 4. Square-off PnL: every open lot closed at the market price (same formula as roundtrips).
+    let pnl = ZERO;
+    for (const l of lots) {
+      const coins = this.inverse ? l.qty.div(l.price) : l.qty;
+      pnl = pnl.plus(l.side === "buy" ? closePrice.minus(l.price).times(coins) : l.price.minus(closePrice).times(coins));
+    }
+    const patch = {
+      status: "closed" as const, endPrice: end.toFixed(), endZone: this.zoneOf(end), reason,
+      squareoffSide: filled.gt(0) ? side : null, squareoffQty: filled.toFixed(),
+      squareoffPrice: filled.gt(0) ? closePrice.toDecimalPlaces(12).toFixed() : null,
+      squareoffPnl: pnl.toDecimalPlaces(18).toFixed(), closedAt: Date.now(),
+    };
+    Object.assign(b, patch);
+    await this.store.updateBasket(b.id, patch);
+    this.rec.squareoffPnl = new D(this.rec.squareoffPnl).plus(pnl).toDecimalPlaces(18).toFixed();
+    await this.store.updateBot(this.id, { squareoffPnl: this.rec.squareoffPnl });
+    this.info(`Basket #${b.index} ${b.startZone} → ${patch.endZone} closed (${REASON_TEXT[reason]}): ` +
+      (filled.gt(0) ? `square-off ${side.toUpperCase()} ${filled.toFixed()} @ ${closePrice.toSignificantDigits(10).toFixed()}` : "position was already 0") +
+      `, square-off PnL ${pnl.toSignificantDigits(8).toFixed()}, RTP PnL ${new D(b.rtpPnl).toSignificantDigits(8).toFixed()} (${b.roundtrips} roundtrips)`);
+    this.placeErrors = 0;
+
+    if (openNext) {
+      this.basket = await this.openBasket(b.index + 1, end);
+      this.levels = await GridBot.computeLevels(this.rec, this.adapter, end);
+      this.info(`Basket #${this.basket.index} started at ${end.toFixed()} (${this.basket.startZone}) with position 0 and ${this.levels.length} grid levels`);
+    }
+    return true;
+  }
+
+  /** Sends one market order and waits (up to ~15 s on live venues) for its fills. */
+  private async marketOrder(side: Side, qty: Dec, price: Dec): Promise<OrderRecord | null> {
+    const clientId = `0x${randomBytes(16).toString("hex")}`;
+    const rec = await this.store.createOrder({
+      botId: this.id, level: 0, side, role: "squareoff", price: price.toFixed(), qty: qty.toFixed(),
+      filledQty: "0", avgFillPrice: null, status: "pending", exchangeOrderId: null, clientId,
+      parentOrderId: null, refPrice: null, error: null, createdAt: Date.now(), filledAt: null,
+    });
+    try {
+      const { exchangeOrderId } = await this.adapter.placeMarket({ symbol: this.symbol, side, qty, clientId, refPrice: price });
+      rec.status = "open";
+      rec.exchangeOrderId = exchangeOrderId;
+      await this.store.updateOrder(rec.id, { status: "open", exchangeOrderId });
+    } catch (err) {
+      rec.status = "rejected";
+      rec.error = message(err).slice(0, 500);
+      await this.store.updateOrder(rec.id, { status: "rejected", error: rec.error });
+      this.event("error", `Square-off ${side} ${qty.toFixed()} at market rejected: ${rec.error}`);
+      return null;
+    }
+    // syncFills updates rec as its fills arrive.
+    const done = () => (rec.status as OrderRecord["status"]) === "filled";
+    for (let i = 0; i < 15 && !done(); i++) {
+      if (this.adapter.live) await sleep(1000);
+      try { await this.syncFills(false, [rec]); } catch (err) { this.warn(`Square-off fill check failed: ${message(err)}`); }
+    }
+    if (!done()) {
+      rec.status = "canceled";
+      rec.error = `Executed ${rec.filledQty} of ${rec.qty}`;
+      await this.store.updateOrder(rec.id, { status: "canceled", error: rec.error });
+    }
+    return rec;
   }
 
   /** True when the bot has stopped but some of its orders are still open on the exchange. */
@@ -635,14 +863,20 @@ export class GridBot {
         unrealized = unrealized.plus(t.side === "sell" ? price.minus(ref).times(qty) : ref.minus(price).times(qty));
       }
     }
-    const net = new D(this.rec.realizedPnl).plus(unrealized).minus(this.rec.fees);
+    const net = new D(this.rec.realizedPnl).plus(this.rec.squareoffPnl).plus(unrealized).minus(this.rec.fees);
     const avg = (s: { qty: Dec; notional: Dec }) => (s.qty.isZero() ? null : s.notional.div(s.qty).toSignificantDigits(12).toFixed());
     return {
       id: this.id, config: { ...this.rec.config }, accountName: this.accountName,
       status: this.rec.status, statusReason: this.rec.statusReason,
       lastPrice: this.rec.lastPrice, lastPriceAt: this.lastPriceAt,
       entryFilledQty: this.rec.entryFilledQty, openExposure: this.openExposure().toFixed(), roundtrips: this.rec.roundtrips,
-      realizedPnl: this.rec.realizedPnl, unrealizedPnl: unrealized.toFixed(), fees: this.rec.fees, netPnl: net.toFixed(),
+      realizedPnl: this.rec.realizedPnl, squareoffPnl: this.rec.squareoffPnl,
+      basket: this.isBasket ? {
+        count: basketCount(this.rec.config), qty: this.basketQty().toSignificantDigits(12).toFixed(),
+        closed: this.basket ? this.basket.index - (this.basket.status === "closed" ? 0 : 1) : 0,
+        current: this.basket ? basketView(this.basket) : null,
+      } : null,
+      unrealizedPnl: unrealized.toFixed(), fees: this.rec.fees, netPnl: net.toFixed(),
       activeLevels: this.levels.length,
       openEntries: open.filter(o => o.role === "entry").map(orderView),
       openTargets: targets.map(orderView),
@@ -681,6 +915,14 @@ function orderView(o: OrderRecord): OrderView {
   return {
     id: o.id, level: o.level, side: o.side, role: o.role, price: o.price, qty: o.qty, filledQty: o.filledQty,
     status: o.status, refPrice: o.refPrice, parentOrderId: o.parentOrderId, createdAt: o.createdAt,
+  };
+}
+
+export function basketView(b: BasketRecord): BasketView {
+  return {
+    index: b.index, status: b.status, startPrice: b.startPrice, startZone: b.startZone, endPrice: b.endPrice, endZone: b.endZone,
+    reason: b.reason, roundtrips: b.roundtrips, rtpPnl: b.rtpPnl, squareoffSide: b.squareoffSide, squareoffQty: b.squareoffQty,
+    squareoffPrice: b.squareoffPrice, squareoffPnl: b.squareoffPnl, startedAt: b.startedAt, closedAt: b.closedAt,
   };
 }
 

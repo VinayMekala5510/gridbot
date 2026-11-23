@@ -18,11 +18,46 @@ export type BotStatus =
   | "running"
   | "halted_volume_cap"
   | "halted_limit_breach"
+  | "halted_total_distance"
   | "killed"
   | "error";
 
 export type Side = "buy" | "sell";
-export type OrderRole = "entry" | "target";
+/** squareoff = market order that closes a basket's position (basket-grid only). */
+export type OrderRole = "entry" | "target" | "squareoff";
+
+/**
+ * step-grid: the original logic (one grid, stops when all steps are in use).
+ * basket-grid: the same grid inside baskets; each basket is squared off at market when the price
+ * moves the basket distance or the basket's quantity is full, then the next basket starts at 0.
+ */
+export type GridModel = "step-grid" | "basket-grid";
+export const GRID_MODELS: GridModel[] = ["step-grid", "basket-grid"];
+
+/** Why a basket was closed. */
+export type BasketReason = "distance_up" | "distance_down" | "qty_full" | "total_distance";
+
+export interface BasketView {
+  /** 1, 2, 3… in the order the baskets ran. */
+  index: number;
+  status: "open" | "closing" | "closed";
+  startPrice: string;
+  /** Start, UB1, UB2…, LB1, LB2… (zones of basket distance measured from the bot entry price). */
+  startZone: string;
+  endPrice: string | null;
+  endZone: string | null;
+  reason: BasketReason | null;
+  roundtrips: number;
+  /** Completed roundtrips inside this basket (before fees). */
+  rtpPnl: string;
+  /** Market order that closed the basket's position (null when it was already flat). */
+  squareoffSide: Side | null;
+  squareoffQty: string;
+  squareoffPrice: string | null;
+  squareoffPnl: string;
+  startedAt: number;
+  closedAt: number | null;
+}
 export type OrderStatus = "pending" | "open" | "filled" | "canceled" | "rejected";
 
 export interface ExchangeInfo {
@@ -52,6 +87,23 @@ export interface BotConfig {
   upperLimit: string;
   lowerLimit: string;
   entryPrice: string;
+  /** Missing on bots created before basket-grid existed: they are step-grid. */
+  gridModel?: GridModel;
+  /** basket-grid: the bot stops once the price is this far from the entry price. */
+  totalDistance?: string | null;
+  /** basket-grid: a basket is squared off once the price moves this far from its start. */
+  basketDistance?: string | null;
+}
+
+export function gridModelOf(c: Pick<BotConfig, "gridModel">): GridModel {
+  return c.gridModel ?? "step-grid";
+}
+
+/** Number of baskets = total distance / basket distance, rounded to a whole number (at least 1). */
+export function basketCount(c: Pick<BotConfig, "totalDistance" | "basketDistance">): number {
+  const total = Number(c.totalDistance), basket = Number(c.basketDistance);
+  if (!(total > 0) || !(basket > 0)) return 1;
+  return Math.max(1, Math.round(total / basket));
 }
 
 export interface OrderView {
@@ -142,6 +194,16 @@ export interface BotView {
   openExposure: string;
   roundtrips: number;
   realizedPnl: string;
+  /** basket-grid: total PnL of all basket square-offs (market closes), before fees. */
+  squareoffPnl: string;
+  /** basket-grid only. */
+  basket: {
+    count: number;
+    /** Market making qty / number of baskets. */
+    qty: string;
+    closed: number;
+    current: BasketView | null;
+  } | null;
   unrealizedPnl: string;
   fees: string;
   netPnl: string;
@@ -175,6 +237,8 @@ export interface Snapshot {
     netPnl: string;
     /** Sum of completed roundtrip PnL across bots (before fees). */
     rtpPnl: string;
+    /** Sum of basket square-off PnL across bots (basket-grid). */
+    squareoffPnl: string;
     realizedPnl: string;
     unrealizedPnl: string;
     fees: string;
@@ -190,6 +254,7 @@ export interface Snapshot {
 export const STOPPED_STATUSES: BotStatus[] = [
   "halted_volume_cap",
   "halted_limit_breach",
+  "halted_total_distance",
   "killed",
   "error",
 ];

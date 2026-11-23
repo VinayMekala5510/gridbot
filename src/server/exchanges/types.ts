@@ -10,6 +10,15 @@ export interface PlaceRequest {
   clientId: string;
 }
 
+export interface MarketRequest {
+  symbol: string;
+  side: Side;
+  qty: Decimal;
+  clientId: string;
+  /** Current market price; venues without true market orders use it to set a slippage limit. */
+  refPrice: Decimal;
+}
+
 export interface PlaceResult {
   exchangeOrderId: string;
 }
@@ -45,6 +54,11 @@ export interface ExchangeAdapter {
   /** Throws with a readable message when the order cannot be valid on this venue. */
   validateOrder(symbol: string, price: Decimal, qty: Decimal): Promise<void>;
   placeLimit(req: PlaceRequest): Promise<PlaceResult>;
+  /**
+   * Market order that executes immediately (basket square-off). Its fills arrive through
+   * fillsFor like any other order; any part that cannot execute is canceled by the venue.
+   */
+  placeMarket(req: MarketRequest): Promise<PlaceResult>;
   cancel(symbol: string, exchangeOrderIds: string[]): Promise<CancelResult>;
   /** After a crash between "send" and "save": finds an order by our client id. */
   lookupByClientId(symbol: string, clientId: string): Promise<string | null>;

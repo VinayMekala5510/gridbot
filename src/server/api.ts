@@ -45,6 +45,9 @@ const botSchema = z.object({
   upperLimit: decimal,
   lowerLimit: decimal,
   entryPrice: decimal,
+  gridModel: z.enum(["step-grid", "basket-grid"]).default("step-grid"),
+  totalDistance: optionalPrice,
+  basketDistance: optionalPrice,
 });
 
 function send(res: ServerResponse, status: number, body: unknown) {
@@ -192,6 +195,10 @@ export async function handleApi(manager: BotManager, req: IncomingMessage, res: 
 
     if (method === "GET" && (m = path.match(/^\/api\/bots\/(\d+)\/trades$/u))) {
       return send(res, 200, { trades: await manager.trades(Number(m[1])) }), true;
+    }
+
+    if (method === "GET" && (m = path.match(/^\/api\/bots\/(\d+)\/baskets$/u))) {
+      return send(res, 200, { baskets: await manager.baskets(Number(m[1])) }), true;
     }
 
     if (method === "GET" && (m = path.match(/^\/api\/bots\/(\d+)\/roundtrips$/u))) {

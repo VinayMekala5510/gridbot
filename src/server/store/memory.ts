@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import type { BotConfig, BotStatus, OrderStatus } from "../../shared/types";
 import type {
-  AccountRecord, AlertRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
+  AccountRecord, AlertRecord, BasketPatch, BasketRecord, BotPatch, BotRecord, EventRecord, FillAggregate, FillRecord,
   OrderPatch, OrderRecord, RoundtripRecord, Store,
 } from "./types";
 
@@ -31,7 +31,7 @@ export class MemoryStore implements Store {
   async createBot(config: BotConfig, status: BotStatus) {
     const rec: BotRecord & { archived: boolean } = {
       id: ++this.seq, config: { ...config }, status, statusReason: null, entryFilledQty: "0",
-      roundtrips: 0, realizedPnl: "0", fees: "0", lastPrice: null, fillCursor: Date.now(),
+      roundtrips: 0, realizedPnl: "0", squareoffPnl: "0", fees: "0", lastPrice: null, fillCursor: Date.now(),
       createdAt: Date.now(), stoppedAt: null, archived: false,
     };
     this.bots.push(rec);
@@ -98,6 +98,19 @@ export class MemoryStore implements Store {
   async insertRoundtrip(r: RoundtripRecord) { this.roundtrips.push({ ...r }); }
   async recentRoundtrips(botId: number, limit: number) {
     return this.roundtrips.filter(r => r.botId === botId).slice(-limit).reverse().map(r => ({ ...r }));
+  }
+  baskets: BasketRecord[] = [];
+  async createBasket(b: Omit<BasketRecord, "id">) {
+    const rec = { ...b, id: ++this.seq };
+    this.baskets.push(rec);
+    return { ...rec };
+  }
+  async updateBasket(id: number, patch: BasketPatch) {
+    const b = this.baskets.find(x => x.id === id);
+    if (b) Object.assign(b, patch);
+  }
+  async listBaskets(botId: number, limit: number) {
+    return this.baskets.filter(b => b.botId === botId).sort((a, b) => b.index - a.index).slice(0, limit).map(b => ({ ...b }));
   }
   async insertEvent(e: EventRecord) { this.events.push({ ...e }); }
   alerts: (AlertRecord & { deleted?: boolean })[] = [];

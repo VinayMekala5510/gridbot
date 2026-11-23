@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { gridModelOf } from "@/shared/types";
 import type { Snapshot } from "@/shared/types";
 import { BotCard } from "./components/BotCard";
 import { AccountSettings } from "./components/AccountSettings";
@@ -180,7 +181,7 @@ export default function Dashboard() {
               {detailBot && snap ? (
                 <>
                   <div className="detail-meta">
-                    <span className="tile-tag">STEP-GRID</span>
+                    <span className={`tile-tag ${gridModelOf(detailBot.config)}`}>{gridModelOf(detailBot.config).toUpperCase()}</span>
                     <span className="tile-hash">#{botTag(detailBot)}</span>
                     <span className="muted small">Started {new Date(detailBot.createdAt).toLocaleString("en-US")}
                       {detailBot.stoppedAt ? ` · Stopped ${new Date(detailBot.stoppedAt).toLocaleString("en-US")}` : ""}</span>
@@ -194,7 +195,8 @@ export default function Dashboard() {
           )}
           {view === "dashboard" && detailId === null && <>
           <section className="overview">
-            <div className="stat"><span>Total combined PnL</span><b className={`mono ${pnlClass(snap?.totals.rtpPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.rtpPnl) : "—"}</b><small>completed roundtrips (RTP) only, all bots</small></div>
+            <div className="stat"><span>RTP PnL</span><b className={`mono ${pnlClass(snap?.totals.rtpPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.rtpPnl) : "—"}</b><small>completed roundtrips, all bots</small></div>
+            <div className="stat"><span>Square-off PnL</span><b className={`mono ${pnlClass(snap?.totals.squareoffPnl ?? 0)}`}>{snap ? fmtPnl(snap.totals.squareoffPnl) : "—"}</b><small>basket square-offs, all basket-grid bots</small></div>
             <div className="stat"><span>Running bots</span><b className="mono">{snap ? snap.totals.runningBots : "—"}</b><small>of {snap?.totals.totalBots ?? 0} on dashboard</small></div>
             <div className="stat"><span>Completed roundtrips</span><b className="mono">{snap ? snap.totals.roundtrips : "—"}</b><small>entry + target both filled</small></div>
             <button className="kill-all" onClick={killAll} disabled={killing || !snap}>

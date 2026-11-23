@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { EXCHANGES, exchangeInfo } from "@/shared/exchanges";
-import type { AccountView, BotMode, ExchangeId } from "@/shared/types";
+import { basketCount } from "@/shared/types";
+import type { AccountView, BotMode, ExchangeId, GridModel } from "@/shared/types";
 import { api, fmt } from "../lib/client";
 import { Card, Field } from "./ui";
 
@@ -15,6 +16,7 @@ interface Props {
 const empty = {
   name: "", exchange: "hyperliquid" as ExchangeId, mode: "paper" as BotMode, accountId: "", symbol: "",
   spread: "", targetSpread: "", steps: "5", stepQty: "", mmQty: "", upperLimit: "", lowerLimit: "", entryPrice: "",
+  gridModel: "step-grid" as GridModel, totalDistance: "", basketDistance: "",
 };
 
 export function BotParameters({ accounts, activeAccountId, notify, onCreated }: Props) {
@@ -83,7 +85,11 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
   const range = n(form.upperLimit) - n(form.lowerLimit);
   const targetTooWide = Number.isFinite(targetSpread) && Number.isFinite(range) && targetSpread >= range;
   const r = (x: number) => fmt(Number(x.toPrecision(10)));
-  const maxEntries = Math.floor(n(form.mmQty) / n(form.stepQty) + 1e-9);
+  const isBasket = form.gridModel === "basket-grid";
+  const baskets = isBasket && n(form.totalDistance) > 0 && n(form.basketDistance) > 0 ? basketCount(form) : NaN;
+  const uneven = Number.isFinite(baskets) && Math.abs(n(form.totalDistance) / n(form.basketDistance) - baskets) > 1e-9;
+  const basketQty = n(form.mmQty) / baskets;
+  const maxEntries = Math.floor((isBasket ? basketQty : n(form.mmQty)) / n(form.stepQty) + 1e-9);
 
   async function useMarket() {
     if (!form.symbol.trim()) return notify("error", "Enter a symbol first.");
@@ -113,6 +119,7 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
     try {
       await api("/api/bots", "POST", {
         ...form, steps, accountId: form.mode === "live" && account ? account.id : null,
+        totalDistance: isBasket ? form.totalDistance : null, basketDistance: isBasket ? form.basketDistance : null,
       });
       notify("ok", `Bot "${form.name}" added and started.`);
       setForm(f => ({ ...f, name: "" }));
@@ -156,6 +163,12 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
         </Card>
 
         <Card title="Trading" icon="〰">
+          <Field label="grid-model" info="step-grid: the original logic — one grid that stops when all steps are in use. basket-grid: the same grid inside baskets; each basket is squared off at market when the price moves the basket distance or the basket's qty is full, then the next basket starts with position 0.">
+            <select value={form.gridModel} onChange={set("gridModel")}>
+              <option value="step-grid">step-grid</option>
+              <option value="basket-grid">basket-grid</option>
+            </select>
+          </Field>
           <Field label="Symbol" info={`All tradable symbols on ${info.label}${symbols.list ? ` (${symbols.list.length})` : ""}. Type a letter to jump through the list.`}>
             <div className="inline">
               {symbols.list ? (
@@ -191,7 +204,16 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
         </Card>
 
         <Card title="Risk / Limits" icon="⛨">
-          <Num label="Market making qty" info="Ceiling on steps in use: filled entries whose target has not filled yet. A completed roundtrip frees its step. When open exposure reaches this, the bot stops and cancels all its orders." value={form.mmQty} onChange={set("mmQty")} />
+          <Num label="Market making qty" info={isBasket
+            ? "Split equally across the baskets: each basket may hold Market making qty ÷ number of baskets. When a basket's qty is full it is squared off and the next basket starts."
+            : "Ceiling on steps in use: filled entries whose target has not filled yet. A completed roundtrip frees its step. When open exposure reaches this, the bot stops and cancels all its orders."} value={form.mmQty} onChange={set("mmQty")} />
+          {isBasket && (
+            <div className="row2">
+              <Num label="Total distance" info="The bot squares off and stops once the price is this far from the bot entry price (up or down)." value={form.totalDistance} onChange={set("totalDistance")} />
+              <Num label="Basket distance" info="A basket is squared off at market once the price moves this far from the basket's start price. Number of baskets = total distance ÷ basket distance." value={form.basketDistance} onChange={set("basketDistance")} />
+            </div>
+          )}
+          {uneven && <p className="hint warn">Total distance ÷ basket distance = {r(n(form.totalDistance) / n(form.basketDistance))}, rounded to {baskets} baskets.</p>}
           <div className="row2">
             <Num label="Upper limit" info="If the market price rises above this, the bot stops completely." value={form.upperLimit} onChange={set("upperLimit")} />
             <Num label="Lower limit" info="If the market price falls below this, the bot stops completely." value={form.lowerLimit} onChange={set("lowerLimit")} />
@@ -204,7 +226,9 @@ export function BotParameters({ accounts, activeAccountId, notify, onCreated }: 
             <div><dt>Grid levels</dt><dd>{Number.isFinite(steps) ? `${steps} buy + ${steps} sell` : "—"}</dd></div>
             <div><dt>Grid range</dt><dd>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(steps)
               ? `${fmt(entry - steps * spread)} – ${fmt(entry + steps * spread)}` : "—"}</dd></div>
-            <div><dt>Steps that can be in use</dt><dd>{Number.isFinite(maxEntries) ? maxEntries : "—"}</dd></div>
+            <div><dt>Grid model</dt><dd>{form.gridModel}</dd></div>
+            {isBasket && <div><dt>Baskets</dt><dd>{Number.isFinite(baskets) ? `${baskets} × ${Number.isFinite(basketQty) ? r(basketQty) : "—"} qty` : "—"}</dd></div>}
+            <div><dt>{isBasket ? "Steps per basket" : "Steps that can be in use"}</dt><dd>{Number.isFinite(maxEntries) ? maxEntries : "—"}</dd></div>
             <div><dt>Open at once</dt><dd>{Number.isFinite(steps) ? `${Math.min(3, steps)} buy + ${Math.min(3, steps)} sell` : "—"}</dd></div>
             <div><dt>Sell entry → target</dt><dd className={targetTooWide ? "neg" : ""}>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(targetSpread) ? `SELL ${r(entry + spread)} → BUY ${r(entry + spread - targetSpread)}` : "—"}</dd></div>
             <div><dt>Buy entry → target</dt><dd className={targetTooWide ? "neg" : ""}>{Number.isFinite(entry) && Number.isFinite(spread) && Number.isFinite(targetSpread) ? `BUY ${r(entry - spread)} → SELL ${r(entry - spread + targetSpread)}` : "—"}</dd></div>
