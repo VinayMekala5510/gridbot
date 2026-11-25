@@ -3,7 +3,7 @@ import { encode } from "@msgpack/msgpack";
 import { Signature, Wallet, concat, getBytes, keccak256, isAddress } from "ethers";
 import type { ExchangeId, Side } from "../../shared/types";
 import { fetchPrice, hyperliquidCoin, hyperliquidUrl, resolveHyperliquidCoin } from "./prices";
-import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
+import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 // Hyperliquid perpetuals adapter (mainnet or testnet).
 // Signing follows Hyperliquid's L1 action scheme: msgpack(action) + nonce +
@@ -247,6 +247,14 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     const oid = status?.filled?.oid ?? status?.resting?.oid;
     if (oid === undefined) throw new Error(status?.error ?? "Hyperliquid did not fill the market order");
     return { exchangeOrderId: String(oid) };
+  }
+
+  async orderState(_symbol: string, id: string): Promise<OrderState> {
+    const res = await this.account.info({ type: "orderStatus", user: this.account.user, oid: Number(id) }) as
+      { status?: string; order?: { status?: string; order?: { sz?: string; origSz?: string } } };
+    if (res.status !== "order" || !res.order?.order) throw new Error(`Hyperliquid does not know order ${id}`);
+    const { sz = "0", origSz = "0" } = res.order.order;
+    return { filledQty: new Decimal(origSz).minus(sz), avgPrice: null, open: res.order.status === "open" };
   }
 
   async openOrderIds(symbol: string): Promise<Set<string>> {

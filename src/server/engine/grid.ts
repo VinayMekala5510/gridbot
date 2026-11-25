@@ -727,8 +727,14 @@ export class GridBot {
     const side: Side = net.gt(0) ? "sell" : "buy";
     const qty = await this.adapter.roundQty(this.symbol, net.abs());
     let filled = ZERO, notional = ZERO;
+    // A new order is sent only after the previous one is confirmed finished on the exchange.
     for (let attempt = 1; attempt <= 3 && filled.lt(qty); attempt++) {
       const order = await this.marketOrder(side, qty.minus(filled), price);
+      if (order === "stuck") {
+        await this.halt("error", `Basket #${b.index} square-off stopped: the market order is still open on the exchange and could not be canceled. ` +
+          "Check the order and the position on the exchange");
+        return false;
+      }
       if (order) {
         filled = filled.plus(order.filledQty);
         notional = notional.plus(new D(order.filledQty).times(order.avgFillPrice ?? price));
@@ -770,8 +776,13 @@ export class GridBot {
     return true;
   }
 
-  /** Sends one market order and waits (up to ~15 s on live venues) for its fills. */
-  private async marketOrder(side: Side, qty: Dec, price: Dec): Promise<OrderRecord | null> {
+  /**
+   * Sends one market order and returns only once the exchange confirms it is finished (filled,
+   * or canceled with nothing left to fill). Its filled quantity comes from the exchange's own
+   * order record, because the trade feed can arrive minutes late.
+   * Returns null when the order was never placed, "stuck" when it is still open and cannot be canceled.
+   */
+  private async marketOrder(side: Side, qty: Dec, price: Dec): Promise<OrderRecord | null | "stuck"> {
     const clientId = `0x${randomBytes(16).toString("hex")}`;
     const rec = await this.store.createOrder({
       botId: this.id, level: 0, side, role: "squareoff", price: price.toFixed(), qty: qty.toFixed(),
@@ -780,21 +791,66 @@ export class GridBot {
     });
     try {
       const { exchangeOrderId } = await this.adapter.placeMarket({ symbol: this.symbol, side, qty, clientId, refPrice: price });
-      rec.status = "open";
       rec.exchangeOrderId = exchangeOrderId;
-      await this.store.updateOrder(rec.id, { status: "open", exchangeOrderId });
     } catch (err) {
-      rec.status = "rejected";
-      rec.error = message(err).slice(0, 500);
-      await this.store.updateOrder(rec.id, { status: "rejected", error: rec.error });
-      this.event("error", `Square-off ${side} ${qty.toFixed()} at market rejected: ${rec.error}`);
-      return null;
+      // The request may have reached the exchange even though the reply failed: look for it.
+      let found: string | null = null;
+      try { found = await this.adapter.lookupByClientId(this.symbol, clientId); } catch { /* treat as not placed only if not found */ }
+      if (!found) {
+        rec.status = "rejected";
+        rec.error = message(err).slice(0, 500);
+        await this.store.updateOrder(rec.id, { status: "rejected", error: rec.error });
+        this.event("error", `Square-off ${side} ${qty.toFixed()} at market rejected: ${rec.error}`);
+        return null;
+      }
+      rec.exchangeOrderId = found;
     }
-    // syncFills updates rec as its fills arrive.
+    rec.status = "open";
+    await this.store.updateOrder(rec.id, { status: "open", exchangeOrderId: rec.exchangeOrderId });
+
+    const id = rec.exchangeOrderId!;
     const done = () => (rec.status as OrderRecord["status"]) === "filled";
-    for (let i = 0; i < 15 && !done(); i++) {
-      if (this.adapter.live) await sleep(1000);
+    const sync = async () => {
       try { await this.syncFills(false, [rec]); } catch (err) { this.warn(`Square-off fill check failed: ${message(err)}`); }
+    };
+    const state = async () => {
+      try { return await this.adapter.orderState(this.symbol, id); } catch (err) {
+        this.warn(`Could not read square-off order ${id}: ${message(err)}`);
+        return null;
+      }
+    };
+
+    // 1. Wait (up to ~15 s on live venues) until the exchange says the order is finished.
+    let st = null as Awaited<ReturnType<typeof state>>;
+    for (let i = 0; i < 15; i++) {
+      if (i > 0 || this.adapter.live) await sleep(this.adapter.live ? 1000 : 0);
+      await sync();
+      st = await state();
+      if (st && !st.open) break;
+    }
+    // 2. Still open (e.g. the venue left part of it resting): cancel it and confirm.
+    if (!st || st.open) {
+      try { await this.adapter.cancel(this.symbol, [id]); } catch (err) { this.warn(`Square-off cancel failed: ${message(err)}`); }
+      for (let i = 0; i < 5; i++) {
+        st = await state();
+        if (st && !st.open) break;
+        await sleep(1000);
+      }
+      if (!st || st.open) {
+        rec.error = "Still open on the exchange; cancel not confirmed";
+        await this.store.updateOrder(rec.id, { error: rec.error });
+        return "stuck";
+      }
+    }
+    // 3. Book what the exchange says filled. Fills the trade feed has not shown yet are
+    //    recorded from the order record (price = its average fill price).
+    await sync();
+    const missing = st.filledQty.minus(rec.filledQty);
+    if (missing.gt(0)) {
+      const recorded = new D(rec.filledQty).times(rec.avgFillPrice ?? 0);
+      const avg = st.avgPrice ?? price;
+      const missingPrice = new D(rec.filledQty).isZero() || !st.avgPrice ? avg : avg.times(st.filledQty).minus(recorded).div(missing);
+      await this.recordFill(rec, { exchangeOrderId: id, tradeId: `${id}:order-state`, price: missingPrice, qty: missing, fee: ZERO, time: Date.now() });
     }
     if (!done()) {
       rec.status = "canceled";

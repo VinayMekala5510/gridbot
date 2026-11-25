@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { createHmac } from "node:crypto";
 import type { Side } from "../../shared/types";
 import { fetchPrice } from "./prices";
-import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
+import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 // Binance Spot adapter: GTC limit orders, fills from /myTrades, HMAC-SHA256 signed requests.
 
@@ -246,6 +246,17 @@ export class BinanceAdapter implements ExchangeAdapter {
     }) as { orderId?: number };
     if (res.orderId === undefined) throw new Error("Binance did not return an order id");
     return { exchangeOrderId: String(res.orderId) };
+  }
+
+  async orderState(symbol: string, id: string): Promise<OrderState> {
+    const r = await symbolRules(symbol);
+    const o = await this.account.signed("GET", "/api/v3/order", { symbol: r.symbol, orderId: id }) as
+      { executedQty: string; cummulativeQuoteQty: string; status: string };
+    const filled = new Decimal(o.executedQty || "0");
+    return {
+      filledQty: filled, avgPrice: filled.gt(0) ? new Decimal(o.cummulativeQuoteQty).div(filled) : null,
+      open: o.status === "NEW" || o.status === "PARTIALLY_FILLED" || o.status === "PENDING_NEW",
+    };
   }
 
   async openOrderIds(symbol: string): Promise<Set<string>> {

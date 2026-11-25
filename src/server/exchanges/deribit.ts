@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import type { ExchangeId, Side } from "../../shared/types";
 import { deribitInstrument, deribitUrl, fetchPrice } from "./prices";
-import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
+import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 // Deribit perpetuals adapter (mainnet or testnet), JSON-RPC over HTTPS with
 // client-credentials OAuth. Inverse perps (BTC-PERPETUAL, ETH-PERPETUAL) take the
@@ -226,11 +226,24 @@ export class DeribitAdapter implements ExchangeAdapter {
 
   async placeMarket(req: MarketRequest) {
     const inst = await this.info(req.symbol);
+    // Immediate-or-cancel: without it Deribit turns the unfilled part of a market order into a
+    // resting limit order (seen on thin testnet books), which may fill minutes later.
     const r = await this.account.private(req.side === "buy" ? "buy" : "sell", {
       instrument_name: inst.name, amount: plain(req.qty), type: "market", label: req.clientId,
+      time_in_force: "immediate_or_cancel",
     }) as { order?: { order_id?: string } };
     if (!r.order?.order_id) throw new Error("Deribit did not return an order id");
     return { exchangeOrderId: r.order.order_id };
+  }
+
+  async orderState(_symbol: string, id: string): Promise<OrderState> {
+    const o = await this.account.private("get_order_state", { order_id: id }) as
+      { filled_amount?: number; average_price?: number; order_state?: string };
+    const filled = new Decimal(o.filled_amount ?? 0);
+    return {
+      filledQty: filled, avgPrice: filled.gt(0) && o.average_price ? new Decimal(o.average_price) : null,
+      open: o.order_state === "open" || o.order_state === "untriggered",
+    };
   }
 
   async lookupByClientId(symbol: string, clientId: string) {

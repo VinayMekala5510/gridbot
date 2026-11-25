@@ -194,3 +194,93 @@ test("basket-grid settings are checked before the bot starts", async () => {
     manager.shutdown();
   }
 });
+
+// ── Square-off safety: the exchange's order record decides, never the (possibly late) trade feed ──
+
+type MarketMode = "late-fill" | "rest-then-cancel" | "stuck" | "reply-lost";
+
+/** Paper venue whose market orders behave like the Deribit testnet incident. */
+class TrickyVenue extends PaperAdapter {
+  placed: { id: string; qty: string; clientId: string }[] = [];
+  private states = new Map<string, { filled: Decimal; avg: Decimal | null; open: boolean; qty: Decimal }>();
+  constructor(private readonly mode: MarketMode, private readonly px: () => Decimal) { super(async () => px()); }
+
+  override async placeMarket(req: { symbol: string; side: "buy" | "sell"; qty: Decimal; clientId: string; refPrice: Decimal }) {
+    const id = `mkt-${this.placed.length + 1}`;
+    this.placed.push({ id, qty: req.qty.toFixed(), clientId: req.clientId });
+    const first = this.placed.length === 1;
+    if (this.mode === "late-fill") this.states.set(id, { filled: req.qty, avg: new Decimal("102.5"), open: false, qty: req.qty });
+    else if (this.mode === "rest-then-cancel" && first) this.states.set(id, { filled: new Decimal("0.5"), avg: new Decimal(102), open: true, qty: req.qty });
+    else if (this.mode === "stuck") this.states.set(id, { filled: new Decimal(0), avg: null, open: true, qty: req.qty });
+    else this.states.set(id, { filled: req.qty, avg: new Decimal(102), open: false, qty: req.qty });
+    if (this.mode === "reply-lost") throw new Error("socket hang up"); // sent, but the reply never arrived
+    return { exchangeOrderId: id };
+  }
+  override async lookupByClientId(_s: string, clientId: string) {
+    return this.placed.find(p => p.clientId === clientId)?.id ?? null;
+  }
+  override async orderState(_s: string, id: string) {
+    const st = this.states.get(id);
+    if (!st) return super.orderState(_s, id);
+    return { filledQty: st.filled, avgPrice: st.avg, open: st.open };
+  }
+  override async cancel(symbol: string, ids: string[]) {
+    for (const id of ids) {
+      const st = this.states.get(id);
+      if (st && this.mode !== "stuck") st.open = false;
+    }
+    return super.cancel(symbol, ids);
+  }
+  override async fillsFor(symbol: string, open: Parameters<PaperAdapter["fillsFor"]>[1], since: number) {
+    // The trade feed never shows market-order trades (they "arrive late").
+    return super.fillsFor(symbol, open.filter(o => !this.states.has(o.exchangeOrderId)), since);
+  }
+}
+
+async function tricky(mode: MarketMode) {
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const venue = new TrickyVenue(mode, () => price);
+  const rec = await store.createBot({ ...base }, "idle");
+  const bot = new GridBot(rec, store, venue, { tickMs: 60_000 });
+  await bot.load();
+  const at = async (p: number) => { price = new Decimal(p); await bot.tick(); };
+  await at(100);
+  await at(101);
+  await at(102); // short 2 → basket distance reached → square-off BUY 2
+  return { store, bot, venue, baskets: () => [...store.baskets].sort((a, b) => a.index - b.index) };
+}
+
+test("square-off filled on the exchange but missing from the trade feed: one order only, booked from the order record", async () => {
+  const { venue, baskets, store, bot } = await tricky("late-fill");
+  assert.equal(venue.placed.length, 1, "no second order is sent");
+  const b1 = baskets()[0];
+  assert.equal(b1.status, "closed");
+  assert.equal(b1.squareoffQty, "2");
+  assert.equal(b1.squareoffPrice, "102.5");
+  assert.equal(b1.squareoffPnl, "-2"); // (101 − 102.5) + (102 − 102.5)
+  assert.ok(store.fills.some(f => f.role === "squareoff" && f.tradeId.endsWith(":order-state") && f.qty === "2"));
+  assert.equal(bot.rec.status, "running");
+});
+
+test("square-off left resting by the venue is canceled and confirmed before the rest is sent", async () => {
+  const { venue, baskets } = await tricky("rest-then-cancel");
+  assert.deepEqual(venue.placed.map(p => p.qty), ["2", "1.5"], "second order is only the part the first did not fill");
+  const b1 = baskets()[0];
+  assert.equal(b1.squareoffQty, "2");
+  assert.equal(b1.status, "closed");
+});
+
+test("square-off order that stays open and cannot be canceled stops the bot without sending another", async () => {
+  const { venue, bot } = await tricky("stuck");
+  assert.equal(venue.placed.length, 1);
+  assert.equal(bot.rec.status, "error");
+  assert.match(bot.rec.statusReason ?? "", /still open on the exchange and could not be canceled/u);
+});
+
+test("square-off whose reply was lost is found by its client id instead of being sent twice", async () => {
+  const { venue, baskets } = await tricky("reply-lost");
+  assert.equal(venue.placed.length, 1);
+  assert.equal(baskets()[0].squareoffQty, "2");
+  assert.equal(baskets()[0].status, "closed");
+});

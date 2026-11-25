@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import { randomUUID } from "node:crypto";
 import type { Side } from "../../shared/types";
-import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, PlaceRequest, TrackedOrder } from "./types";
+import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 /**
  * Simulated venue. Uses a real (or injected) price source; a resting limit
@@ -24,13 +24,19 @@ export class PaperAdapter implements ExchangeAdapter {
 
   /** Market orders fill completely at the market price on the next fill check. */
   private market = new Set<string>();
-  async placeMarket(_req: MarketRequest) {
+  private marketState = new Map<string, OrderState>();
+  async placeMarket(req: MarketRequest) {
     const id = `paper-mkt-${randomUUID()}`;
     this.market.add(id);
+    this.marketState.set(id, { filledQty: req.qty, avgPrice: await this.priceSource(req.symbol), open: false });
     return { exchangeOrderId: id };
   }
 
-  async lookupByClientId(_symbol: string, _clientId: string) { return null; }
+  async orderState(_symbol: string, id: string): Promise<OrderState> {
+    return this.marketState.get(id) ?? { filledQty: new Decimal(0), avgPrice: null, open: true };
+  }
+
+  async lookupByClientId(_symbol: string, _clientId: string): Promise<string | null> { return null; }
 
   async cancel(_symbol: string, ids: string[]): Promise<CancelResult> {
     return { canceled: [...ids], failed: [] };
@@ -49,7 +55,7 @@ export class PaperAdapter implements ExchangeAdapter {
       if (isMarket) this.market.delete(order.exchangeOrderId);
       fills.push({
         exchangeOrderId: order.exchangeOrderId, tradeId: `${order.exchangeOrderId}:fill`,
-        price: isMarket ? price : order.price, qty: remaining, fee: new Decimal(0), time: now,
+        price: isMarket ? this.marketState.get(order.exchangeOrderId)?.avgPrice ?? price : order.price, qty: remaining, fee: new Decimal(0), time: now,
       });
     }
     return { fills, cursor: now };

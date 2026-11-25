@@ -19,6 +19,14 @@ export interface MarketRequest {
   refPrice: Decimal;
 }
 
+export interface OrderState {
+  filledQty: Decimal;
+  /** Average fill price, when the venue reports it. */
+  avgPrice: Decimal | null;
+  /** True while the order can still fill (resting or being matched). */
+  open: boolean;
+}
+
 export interface PlaceResult {
   exchangeOrderId: string;
 }
@@ -59,6 +67,12 @@ export interface ExchangeAdapter {
    * fillsFor like any other order; any part that cannot execute is canceled by the venue.
    */
   placeMarket(req: MarketRequest): Promise<PlaceResult>;
+  /**
+   * The venue's own record of one order: how much filled and whether it can still fill.
+   * Used to confirm a square-off order is finished before another is sent, because the
+   * trade feed can arrive late.
+   */
+  orderState(symbol: string, exchangeOrderId: string): Promise<OrderState>;
   cancel(symbol: string, exchangeOrderIds: string[]): Promise<CancelResult>;
   /** After a crash between "send" and "save": finds an order by our client id. */
   lookupByClientId(symbol: string, clientId: string): Promise<string | null>;
