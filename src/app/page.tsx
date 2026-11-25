@@ -162,7 +162,8 @@ export default function Dashboard() {
               <span className="nav-label">{v.label}</span>
               {v.id === "dashboard" && snap && <span className="nav-count">{snap.totals.runningBots}</span>}
               {v.id === "accounts" && snap && <span className="nav-count">{snap.accounts.length}</span>}
-              {v.id === "alerts" && snap && <span className={`nav-count${snap.alerts.some(a => a.status !== "watching") ? " hot" : ""}`}>{snap.alerts.length}</span>}
+              {v.id === "alerts" && snap && <span className={`nav-count${snap.alerts.some(a => a.status !== "watching") ? " hot" : ""}`}
+                title="Alerts still waiting for their limit (triggered alerts are not counted)">{snap.alerts.filter(a => a.status === "watching").length}</span>}
             </button>
           ))}
         </nav>
