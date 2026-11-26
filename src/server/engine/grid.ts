@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import { randomBytes } from "node:crypto";
 import { STOPPED_STATUSES, basketCount, gridModelOf } from "../../shared/types";
 import type { BasketReason, BasketView, BotStatus, BotView, EventView, OrderRole, OrderView, Side } from "../../shared/types";
+import { SQUAREOFF_SLIPPAGE } from "../exchanges/types";
 import type { ExchangeAdapter, ExchangeFill } from "../exchanges/types";
 import type { BasketRecord, BotRecord, FillRecord, OrderRecord, RoundtripRecord, Store } from "../store/types";
 
@@ -22,6 +23,7 @@ const REASON_TEXT: Record<BasketReason, string> = {
 };
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 
 export interface GridBotOptions {
   tickMs?: number;
@@ -62,6 +64,8 @@ export class GridBot {
   private awaitingTarget = new Map<number, OrderRecord>();
   /** basket-grid: the basket being traded (its start price is the grid's anchor). */
   private basket: BasketRecord | null = null;
+  /** basket-grid: leftover the final square-off could not close (e.g. "long 0.3"). */
+  private unclosed = "";
   private events: EventView[] = [];
   private summary = { buy: { count: 0, qty: ZERO, notional: ZERO }, sell: { count: 0, qty: ZERO, notional: ZERO } };
   private levels: Level[] = [];
@@ -651,11 +655,13 @@ export class GridBot {
     return `${diff.gt(0) ? "UB" : "LB"}${n}`;
   }
 
-  private openBasket(index: number, start: Dec): Promise<BasketRecord> {
+  private openBasket(index: number, start: Dec, carry: { side: Side; qty: Dec; price: Dec } | null = null): Promise<BasketRecord> {
     return this.store.createBasket({
       botId: this.id, index, status: "open", startPrice: start.toFixed(), startZone: this.zoneOf(start),
       endPrice: null, endZone: null, reason: null, roundtrips: 0, rtpPnl: "0",
-      squareoffSide: null, squareoffQty: "0", squareoffPrice: null, squareoffPnl: "0", startedAt: Date.now(), closedAt: null,
+      squareoffSide: null, squareoffQty: "0", squareoffPrice: null, squareoffPnl: "0",
+      carryInSide: carry?.side ?? null, carryInQty: carry?.qty.toFixed() ?? "0", carryInPrice: carry?.price.toFixed() ?? null,
+      startedAt: Date.now(), closedAt: null,
     });
   }
 
@@ -674,7 +680,8 @@ export class GridBot {
       if (await this.squareOff("total_distance", price, price, false)) {
         await this.halt("halted_total_distance",
           `Total distance reached: price ${price.toFixed()} is ${fromEntry.toFixed()} from the entry price ${c.entryPrice} ` +
-          `(total distance ${c.totalDistance}). Basket #${b.index} was squared off`);
+          `(total distance ${c.totalDistance}). Basket #${b.index} was squared off` +
+          (this.unclosed ? `, except a leftover ${this.unclosed} that is still open on the exchange — close it there` : ""));
       }
       return;
     }
@@ -721,15 +728,24 @@ export class GridBot {
     }
     for (const e of this.awaitingTarget.values()) lots.push({ side: e.side, qty: new D(e.filledQty), price: new D(e.avgFillPrice ?? e.price) });
     this.awaitingTarget.clear();
+    // A small leftover carried in from the previous basket is closed together with this one.
+    if (b.carryInSide && new D(b.carryInQty).gt(0)) {
+      lots.push({ side: b.carryInSide, qty: new D(b.carryInQty), price: new D(b.carryInPrice ?? price) });
+    }
     const net = lots.reduce((s, l) => (l.side === "buy" ? s.plus(l.qty) : s.minus(l.qty)), ZERO);
 
     // 3. Close the net position at market (up to 3 tries for any part that did not execute).
     const side: Side = net.gt(0) ? "sell" : "buy";
-    const qty = await this.adapter.roundQty(this.symbol, net.abs());
+    const target = net.abs();
     let filled = ZERO, notional = ZERO;
     // A new order is sent only after the previous one is confirmed finished on the exchange.
-    for (let attempt = 1; attempt <= 3 && filled.lt(qty); attempt++) {
-      const order = await this.marketOrder(side, qty.minus(filled), price);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const qty = await this.adapter.roundQty(this.symbol, target.minus(filled)); // below the venue's minimum → 0
+      if (qty.lte(0)) break;
+      // The slippage cap is tight (0.2%): each retry is priced from the latest market price.
+      let ref = price;
+      if (attempt > 1) { try { ref = await this.adapter.getPrice(this.symbol); } catch { /* keep the last price */ } }
+      const order = await this.marketOrder(side, qty, ref);
       if (order === "stuck") {
         await this.halt("error", `Basket #${b.index} square-off stopped: the market order is still open on the exchange and could not be canceled. ` +
           "Check the order and the position on the exchange");
@@ -739,15 +755,22 @@ export class GridBot {
         filled = filled.plus(order.filledQty);
         notional = notional.plus(new D(order.filledQty).times(order.avgFillPrice ?? price));
       }
-      if (filled.lt(qty) && attempt < 3) await sleep(1000 * attempt);
+      if (filled.lt(target) && attempt < 3) await sleep(1000 * attempt);
     }
-    if (filled.lt(qty)) {
-      await this.halt("error", `Basket #${b.index} square-off incomplete: ${side.toUpperCase()} ${qty.minus(filled).toFixed()} could not be executed at market. Close it on the exchange`);
+    // Whatever is left (IOC partial fills within the 0.2% cap, venue minimum size) is carried into
+    // the next basket and closed with it — up to one basket's qty. More than that stops the bot.
+    const leftover = target.minus(filled);
+    const carryMax = this.basketQty();
+    if (leftover.gt(carryMax)) {
+      await this.halt("error", `Basket #${b.index} square-off incomplete: ${side.toUpperCase()} ${leftover.toFixed()} could not be executed ` +
+        `within the ${SQUAREOFF_SLIPPAGE * 100}% price cap, more than one basket's qty (${carryMax.toSignificantDigits(12).toFixed()}) to carry forward. Close it on the exchange`);
       return false;
     }
     const closePrice = filled.gt(0) ? notional.div(filled) : price;
 
-    // 4. Square-off PnL: every open lot closed at the market price (same formula as roundtrips).
+    // 4. Square-off PnL: every open lot valued at the close price (same formula as roundtrips).
+    //    A carried leftover is valued again from this close price in the next basket, so its
+    //    PnL is never counted twice.
     let pnl = ZERO;
     for (const l of lots) {
       const coins = this.inverse ? l.qty.div(l.price) : l.qty;
@@ -768,10 +791,16 @@ export class GridBot {
       `, square-off PnL ${pnl.toSignificantDigits(8).toFixed()}, RTP PnL ${new D(b.rtpPnl).toSignificantDigits(8).toFixed()} (${b.roundtrips} roundtrips)`);
     this.placeErrors = 0;
 
+    const carry = leftover.gt(0) ? { side: (net.gt(0) ? "buy" : "sell") as Side, qty: leftover, price: closePrice } : null;
+    const held = carry ? `${carry.side === "buy" ? "long" : "short"} ${carry.qty.toFixed()}` : "";
     if (openNext) {
-      this.basket = await this.openBasket(b.index + 1, end);
+      this.basket = await this.openBasket(b.index + 1, end, carry);
       this.levels = await GridBot.computeLevels(this.rec, this.adapter, end);
-      this.info(`Basket #${this.basket.index} started at ${end.toFixed()} (${this.basket.startZone}) with position 0 and ${this.levels.length} grid levels`);
+      this.info(`Basket #${this.basket.index} started at ${end.toFixed()} (${this.basket.startZone}) with ` +
+        (carry ? `a small leftover ${held} carried forward from basket #${b.index}` : "position 0") + ` and ${this.levels.length} grid levels`);
+    } else if (carry) {
+      this.unclosed = held;
+      this.event("warn", `A leftover ${held} could not be closed within the price cap and stays open on the exchange (no next basket to carry it into)`);
     }
     return true;
   }
@@ -978,7 +1007,8 @@ export function basketView(b: BasketRecord): BasketView {
   return {
     index: b.index, status: b.status, startPrice: b.startPrice, startZone: b.startZone, endPrice: b.endPrice, endZone: b.endZone,
     reason: b.reason, roundtrips: b.roundtrips, rtpPnl: b.rtpPnl, squareoffSide: b.squareoffSide, squareoffQty: b.squareoffQty,
-    squareoffPrice: b.squareoffPrice, squareoffPnl: b.squareoffPnl, startedAt: b.startedAt, closedAt: b.closedAt,
+    squareoffPrice: b.squareoffPrice, squareoffPnl: b.squareoffPnl, carryInSide: b.carryInSide, carryInQty: b.carryInQty,
+    startedAt: b.startedAt, closedAt: b.closedAt,
   };
 }
 

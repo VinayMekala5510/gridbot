@@ -147,6 +147,9 @@ const ADDED_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "bots", column: "total_distance", ddl: "DECIMAL(38,18) NULL" },
   { table: "bots", column: "basket_distance", ddl: "DECIMAL(38,18) NULL" },
   { table: "bots", column: "squareoff_pnl", ddl: "DECIMAL(38,18) NOT NULL DEFAULT 0" },
+  { table: "baskets", column: "carry_in_side", ddl: "VARCHAR(4) NULL" },
+  { table: "baskets", column: "carry_in_qty", ddl: "DECIMAL(38,18) NOT NULL DEFAULT 0" },
+  { table: "baskets", column: "carry_in_price", ddl: "DECIMAL(38,18) NULL" },
 ];
 
 type Row = RowDataPacket & Record<string, unknown>;
@@ -214,6 +217,8 @@ function basketFromRow(r: Row): BasketRecord {
     roundtrips: Number(r.roundtrips), rtpPnl: dec(r.rtp_pnl),
     squareoffSide: (r.squareoff_side ?? null) as BasketRecord["squareoffSide"], squareoffQty: dec(r.squareoff_qty),
     squareoffPrice: decOrNull(r.squareoff_price), squareoffPnl: dec(r.squareoff_pnl),
+    carryInSide: (r.carry_in_side ?? null) as BasketRecord["carryInSide"], carryInQty: dec(r.carry_in_qty ?? 0),
+    carryInPrice: decOrNull(r.carry_in_price),
     startedAt: ms(r.started_at), closedAt: msOrNull(r.closed_at),
   };
 }
@@ -387,10 +392,11 @@ export class MysqlStore implements Store {
   async createBasket(b: Omit<BasketRecord, "id">) {
     const [res] = await this.pool.execute<ResultSetHeader>(
       `INSERT INTO baskets (bot_id, idx, status, start_price, start_zone, end_price, end_zone, reason, roundtrips, rtp_pnl,
-        squareoff_side, squareoff_qty, squareoff_price, squareoff_pnl, started_at, closed_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        squareoff_side, squareoff_qty, squareoff_price, squareoff_pnl, carry_in_side, carry_in_qty, carry_in_price, started_at, closed_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [b.botId, b.index, b.status, b.startPrice, b.startZone, b.endPrice, b.endZone, b.reason, b.roundtrips, b.rtpPnl,
-        b.squareoffSide, b.squareoffQty, b.squareoffPrice, b.squareoffPnl, new Date(b.startedAt), date(b.closedAt)]);
+        b.squareoffSide, b.squareoffQty, b.squareoffPrice, b.squareoffPnl, b.carryInSide, b.carryInQty, b.carryInPrice,
+        new Date(b.startedAt), date(b.closedAt)]);
     return { ...b, id: res.insertId };
   }
   async updateBasket(id: number, patch: BasketPatch) {

@@ -460,3 +460,4 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .reason-tag.distance_down { color: var(--sell); background: rgba(255, 93, 108, .14); }
 .reason-tag.qty_full, .reason-tag.total_distance { color: var(--warn); background: rgba(245, 184, 74, .14); }
 .reason-tag.open { color: var(--accent-2); background: rgba(79, 140, 255, .14); }
+.route-table td small.carry { color: var(--warn); }

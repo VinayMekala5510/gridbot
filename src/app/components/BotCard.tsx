@@ -273,7 +273,8 @@ function BasketRoute({ bot }: { bot: BotView }) {
                     <td className="mono"><b className={pnlClass(b.rtpPnl)}>{fmtPnl(b.rtpPnl)}</b></td>
                     <td className="mono">{b.squareoffSide
                       ? <><span className={b.squareoffSide}>{b.squareoffSide.toUpperCase()}</span> {fmt(b.squareoffQty)} @ {fmt(b.squareoffPrice)}</>
-                      : <small>position was 0</small>}</td>
+                      : <small>position was 0</small>}
+                      <Carry b={b} next={(rows ?? []).find(n => n.index === b.index + 1) ?? (current?.index === b.index + 1 ? current : undefined)} /></td>
                     <td className="mono"><b className={pnlClass(b.squareoffPnl)}>{fmtPnl(b.squareoffPnl)}</b></td>
                     <td className="mono"><b className={pnlClass(total)}>{fmtPnl(total)}</b></td>
                     <td className="mono">{b.closedAt ? when(b.closedAt) : "—"}</td>
@@ -288,7 +289,7 @@ function BasketRoute({ bot }: { bot: BotView }) {
                   <td className="mono">{fmt(current.startPrice)} → {fmt(bot.lastPrice)}{moved !== null && running && <small> ({fmt(Math.max(0, Number(bot.config.basketDistance) - moved))} to next basket)</small>}</td>
                   <td className="mono">{current.roundtrips}</td>
                   <td className="mono"><b className={pnlClass(current.rtpPnl)}>{fmtPnl(current.rtpPnl)}</b></td>
-                  <td className="mono"><small>holding {fmt(bot.openExposure)}</small></td>
+                  <td className="mono"><small>holding {fmt(bot.openExposure)}</small><Carry b={current} /></td>
                   <td className="mono">—</td>
                   <td className="mono">—</td>
                   <td className="mono"><small>since {when(current.startedAt)}</small></td>
@@ -301,6 +302,17 @@ function BasketRoute({ bot }: { bot: BotView }) {
       )}
     </section>
   );
+}
+
+/** Small square-off leftover (< 0.5) carried between baskets: "carried in" on a basket, "carried to next" on the one before. */
+function Carry({ b, next }: { b: BasketView; next?: BasketView }) {
+  const held = (x: BasketView) => `${x.carryInSide === "buy" ? "long" : "short"} ${fmt(x.carryInQty)}`;
+  const out = next && Number(next.carryInQty) > 0 ? next : null;
+  const into = Number(b.carryInQty) > 0 ? b : null;
+  return <>
+    {into && <small className="carry"> · {held(into)} carried in</small>}
+    {out && <small className="carry"> · {held(out)} carried to next</small>}
+  </>;
 }
 
 function Metric({ label, value, cls = "", big = false, sub, title }: { label: string; value: string; cls?: string; big?: boolean; sub?: string; title?: string }) {

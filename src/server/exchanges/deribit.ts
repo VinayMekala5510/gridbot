@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import type { ExchangeId, Side } from "../../shared/types";
 import { deribitInstrument, deribitUrl, fetchPrice } from "./prices";
+import { SQUAREOFF_SLIPPAGE } from "./types";
 import type { AccountClient, CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 // Deribit perpetuals adapter (mainnet or testnet), JSON-RPC over HTTPS with
@@ -224,12 +225,22 @@ export class DeribitAdapter implements ExchangeAdapter {
     return { exchangeOrderId: r.order.order_id };
   }
 
+  /**
+   * Deribit market orders leave any unfilled part resting as a limit order (seen on thin testnet
+   * books, filling minutes later), and Deribit rejects immediate-or-cancel on type "market".
+   * So, like Hyperliquid: an immediate-or-cancel LIMIT order priced SQUAREOFF_SLIPPAGE (0.2%)
+   * through the market, kept inside Deribit's allowed price band (min_price / max_price).
+   */
   async placeMarket(req: MarketRequest) {
     const inst = await this.info(req.symbol);
-    // Immediate-or-cancel: without it Deribit turns the unfilled part of a market order into a
-    // resting limit order (seen on thin testnet books), which may fill minutes later.
+    const book = await rpc(this.account.base, "public/get_order_book", { instrument_name: inst.name, depth: 1 }) as
+      { min_price: number; max_price: number };
+    const through = req.side === "buy"
+      ? Decimal.min(req.refPrice.times(1 + SQUAREOFF_SLIPPAGE), book.max_price)
+      : Decimal.max(req.refPrice.times(1 - SQUAREOFF_SLIPPAGE), book.min_price);
+    const price = await this.roundPrice(req.symbol, through, req.side);
     const r = await this.account.private(req.side === "buy" ? "buy" : "sell", {
-      instrument_name: inst.name, amount: plain(req.qty), type: "market", label: req.clientId,
+      instrument_name: inst.name, amount: plain(req.qty), type: "limit", price: plain(price), label: req.clientId,
       time_in_force: "immediate_or_cancel",
     }) as { order?: { order_id?: string } };
     if (!r.order?.order_id) throw new Error("Deribit did not return an order id");

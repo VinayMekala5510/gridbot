@@ -97,11 +97,16 @@ export interface BasketRecord {
   squareoffQty: string;
   squareoffPrice: string | null;
   squareoffPnl: string;
+  /** Small leftover (< 0.5) the previous basket could not close, carried into this one. */
+  carryInSide: Side | null;
+  carryInQty: string;
+  /** Price the carried leftover is valued from (the previous square-off price). */
+  carryInPrice: string | null;
   startedAt: number;
   closedAt: number | null;
 }
 
-export type BasketPatch = Partial<Omit<BasketRecord, "id" | "botId" | "index" | "startPrice" | "startZone" | "startedAt">>;
+export type BasketPatch = Partial<Omit<BasketRecord, "id" | "botId" | "index" | "startPrice" | "startZone" | "startedAt" | "carryInSide" | "carryInQty" | "carryInPrice">>;
 
 export interface EventRecord {
   botId: number | null;

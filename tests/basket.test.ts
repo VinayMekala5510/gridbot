@@ -197,13 +197,13 @@ test("basket-grid settings are checked before the bot starts", async () => {
 
 // ── Square-off safety: the exchange's order record decides, never the (possibly late) trade feed ──
 
-type MarketMode = "late-fill" | "rest-then-cancel" | "stuck" | "reply-lost";
+type MarketMode = "late-fill" | "rest-then-cancel" | "stuck" | "reply-lost" | "dust" | "big-left" | "full" | "none";
 
 /** Paper venue whose market orders behave like the Deribit testnet incident. */
 class TrickyVenue extends PaperAdapter {
   placed: { id: string; qty: string; clientId: string }[] = [];
   private states = new Map<string, { filled: Decimal; avg: Decimal | null; open: boolean; qty: Decimal }>();
-  constructor(private readonly mode: MarketMode, private readonly px: () => Decimal) { super(async () => px()); }
+  constructor(public mode: MarketMode, private readonly px: () => Decimal) { super(async () => px()); }
 
   override async placeMarket(req: { symbol: string; side: "buy" | "sell"; qty: Decimal; clientId: string; refPrice: Decimal }) {
     const id = `mkt-${this.placed.length + 1}`;
@@ -212,6 +212,10 @@ class TrickyVenue extends PaperAdapter {
     if (this.mode === "late-fill") this.states.set(id, { filled: req.qty, avg: new Decimal("102.5"), open: false, qty: req.qty });
     else if (this.mode === "rest-then-cancel" && first) this.states.set(id, { filled: new Decimal("0.5"), avg: new Decimal(102), open: true, qty: req.qty });
     else if (this.mode === "stuck") this.states.set(id, { filled: new Decimal(0), avg: null, open: true, qty: req.qty });
+    else if (this.mode === "dust" || this.mode === "big-left") {
+      const short = new Decimal(this.mode === "dust" ? "0.3" : "0.6");
+      this.states.set(id, { filled: Decimal.max(0, req.qty.minus(short)), avg: new Decimal(102), open: false, qty: req.qty });
+    } else if (this.mode === "none") this.states.set(id, { filled: new Decimal(0), avg: null, open: false, qty: req.qty }); // nothing within the cap
     else this.states.set(id, { filled: req.qty, avg: new Decimal(102), open: false, qty: req.qty });
     if (this.mode === "reply-lost") throw new Error("socket hang up"); // sent, but the reply never arrived
     return { exchangeOrderId: id };
@@ -283,4 +287,88 @@ test("square-off whose reply was lost is found by its client id instead of being
   assert.equal(venue.placed.length, 1);
   assert.equal(baskets()[0].squareoffQty, "2");
   assert.equal(baskets()[0].status, "closed");
+});
+
+// ── Small leftovers (< 0.5) are carried into the next basket instead of stopping the bot ──
+
+async function walk(mode: MarketMode) {
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const venue = new TrickyVenue(mode, () => price);
+  const rec = await store.createBot({ ...base }, "idle");
+  const bot = new GridBot(rec, store, venue, { tickMs: 60_000 });
+  await bot.load();
+  const at = async (p: number) => { price = new Decimal(p); await bot.tick(); };
+  return { store, bot, venue, at, baskets: () => [...store.baskets].sort((a, b) => a.index - b.index) };
+}
+
+test("leftover under 0.5 after square-off is carried into the next basket and closed with it", async () => {
+  const { at, bot, venue, baskets } = await walk("dust");
+  await at(100);
+  await at(101);
+  await at(102); // short 2 → BUY 2 fills only 1.7, retries fill nothing → 0.3 left
+  assert.equal(bot.rec.status, "running", "the bot keeps running");
+  const [b1, b2] = baskets();
+  assert.equal(b1.status, "closed");
+  assert.equal(b1.squareoffQty, "1.7");
+  assert.equal(b2.carryInSide, "sell");   // still short 0.3
+  assert.equal(b2.carryInQty, "0.3");
+  assert.equal(b2.carryInPrice, "102");
+  assert.equal(bot.view().basket?.current?.carryInQty, "0.3");
+
+  venue.mode = "full";
+  await at(103);
+  await at(104); // basket 2: sells 103, 104 fill; moved 2 → BUY 2 + carried 0.3
+  const b2done = baskets()[1];
+  assert.equal(b2done.status, "closed");
+  assert.equal(b2done.squareoffSide, "buy");
+  assert.equal(b2done.squareoffQty, "2.3");
+  assert.equal(baskets()[2].carryInQty, "0", "nothing left to carry");
+  // Carried part is valued from 102 (basket 1 close) to 102 (basket 2 close): no double counting.
+  // basket 1: (101 − 102) + (102 − 102) = −1 ; basket 2: (103 − 102) + (104 − 102) + 0.3 × (102 − 102) = 3
+  assert.equal(b1.squareoffPnl, "-1");
+  assert.equal(b2done.squareoffPnl, "3");
+});
+
+test("a leftover that keeps failing is carried again, basket after basket", async () => {
+  const { at, bot, baskets } = await walk("dust");
+  await at(100);
+  await at(101);
+  await at(102); // basket 1 → 0.3 carried
+  await at(103);
+  await at(104); // basket 2: BUY 2.3 fills 2.0 → 0.3 carried again
+  assert.equal(bot.rec.status, "running");
+  assert.equal(baskets()[1].squareoffQty, "2");
+  assert.equal(baskets()[2].carryInQty, "0.3");
+});
+
+test("leftover of 0.5 or more (but within one basket qty) is carried too", async () => {
+  const { at, bot, baskets } = await walk("big-left");
+  await at(100);
+  await at(101);
+  await at(102); // BUY 2 fills 1.4 → 0.6 left; basket qty is 4
+  assert.equal(bot.rec.status, "running");
+  assert.equal(baskets()[1].carryInQty, "0.6");
+});
+
+test("nothing fills within the 0.2% cap: up to one basket qty is carried; more than that stops the bot", async () => {
+  // Market making qty 10 → 5 baskets × 2 qty.
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const venue = new TrickyVenue("none", () => price);
+  const rec = await store.createBot({ ...base, mmQty: "10" }, "idle");
+  const bot = new GridBot(rec, store, venue, { tickMs: 60_000 });
+  await bot.load();
+  const at = async (p: number) => { price = new Decimal(p); await bot.tick(); };
+  await at(100);
+  await at(101);
+  await at(102); // short 2 = basket qty → square off; nothing fills → carry short 2 (= one basket qty)
+  assert.equal(bot.rec.status, "running");
+  assert.equal(venue.placed.length, 3, "3 tries, each at the latest price");
+  const b2 = [...store.baskets].sort((a, b) => a.index - b.index)[1];
+  assert.equal(b2.carryInQty, "2");
+  await at(103);
+  await at(104); // basket 2 full again: short 2 + carried 2 = 4 > 2 → stop
+  assert.equal(bot.rec.status, "error");
+  assert.match(bot.rec.statusReason ?? "", /BUY 4 could not be executed within the 0.2% price cap, more than one basket.s qty \(2\)/u);
 });

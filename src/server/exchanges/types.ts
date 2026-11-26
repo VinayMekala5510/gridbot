@@ -10,6 +10,12 @@ export interface PlaceRequest {
   clientId: string;
 }
 
+/**
+ * Square-off orders on venues without a safe market order (Hyperliquid, Deribit) are
+ * immediate-or-cancel limit orders at most this far through the market price: 0.2%.
+ */
+export const SQUAREOFF_SLIPPAGE = 0.002;
+
 export interface MarketRequest {
   symbol: string;
   side: Side;

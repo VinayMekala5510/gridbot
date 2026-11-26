@@ -3,6 +3,7 @@ import { encode } from "@msgpack/msgpack";
 import { Signature, Wallet, concat, getBytes, keccak256, isAddress } from "ethers";
 import type { ExchangeId, Side } from "../../shared/types";
 import { fetchPrice, hyperliquidCoin, hyperliquidUrl, resolveHyperliquidCoin } from "./prices";
+import { SQUAREOFF_SLIPPAGE } from "./types";
 import type { CancelResult, ExchangeAdapter, ExchangeFill, MarketRequest, OrderState, PlaceRequest, TrackedOrder } from "./types";
 
 // Hyperliquid perpetuals adapter (mainnet or testnet).
@@ -233,13 +234,13 @@ export class HyperliquidAdapter implements ExchangeAdapter {
   }
 
   /**
-   * Hyperliquid has no true market order: like its own app, send an immediate-or-cancel limit
-   * order priced 5% through the market, so it takes the book at the best available prices.
+   * Hyperliquid has no true market order: send an immediate-or-cancel limit order priced
+   * SQUAREOFF_SLIPPAGE (0.2%) through the market; whatever cannot fill within that is canceled.
    */
   async placeMarket(req: MarketRequest) {
     const { index, szDecimals } = await this.account.asset(req.symbol);
     if (!/^0x[0-9a-f]{32}$/u.test(req.clientId)) throw new Error("Invalid client order id");
-    const limit = roundHyperliquidPrice(req.refPrice.times(req.side === "buy" ? 1.05 : 0.95), szDecimals, req.side);
+    const limit = roundHyperliquidPrice(req.refPrice.times(req.side === "buy" ? 1 + SQUAREOFF_SLIPPAGE : 1 - SQUAREOFF_SLIPPAGE), szDecimals, req.side);
     const order = { a: index, b: req.side === "buy", p: wire(limit), s: wire(req.qty), r: false, t: { limit: { tif: "Ioc" } }, c: req.clientId };
     const res = await this.account.sendAction({ type: "order", orders: [order], grouping: "na" }) as
       { data?: { statuses?: ({ filled?: { oid: number }; resting?: { oid: number }; error?: string })[] } };

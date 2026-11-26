@@ -55,6 +55,9 @@ export interface BasketView {
   squareoffQty: string;
   squareoffPrice: string | null;
   squareoffPnl: string;
+  /** Small leftover (< 0.5) carried in from the previous basket, squared off with this one. */
+  carryInSide: Side | null;
+  carryInQty: string;
   startedAt: number;
   closedAt: number | null;
 }
