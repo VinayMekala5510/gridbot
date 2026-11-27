@@ -24,11 +24,24 @@ const REASON_TEXT: Record<BasketReason, string> = {
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** Longest exchange pause the bot waits out before treating errors as real failures. */
+const PAUSE_MAX_MS = 3 * 60_000;
+
+/**
+ * Temporary, exchange-wide pauses that end by themselves: Deribit refuses orders and cancels with
+ * "settlement_in_progress" for ~30 s during its daily 08:00 UTC settlement.
+ */
+export function isVenuePause(error: string): boolean {
+  return /settlement_in_progress|platform_locked|under maintenance/iu.test(error);
+}
+
 
 export interface GridBotOptions {
   tickMs?: number;
   /** Consecutive order-placement failures before the bot halts with an error. */
   maxPlaceErrors?: number;
+  /** How often to retry while the exchange is paused (settlement). Default 5 s. */
+  pauseRetryMs?: number;
   /** Entry orders allowed to rest at once on each side (default MAX_OPEN_PER_SIDE). */
   maxOpenPerSide?: number;
   accountName?: string | null;
@@ -81,6 +94,7 @@ export class GridBot {
   private lastReconcile = 0;
   private readonly tickMs: number;
   private readonly maxPlaceErrors: number;
+  private readonly pauseRetryMs: number;
   private readonly maxOpenPerSide: number;
   private readonly isFrozen: () => boolean;
   readonly accountName: string | null;
@@ -89,6 +103,7 @@ export class GridBot {
     this.rec = rec;
     this.tickMs = opts.tickMs ?? 2000;
     this.maxPlaceErrors = opts.maxPlaceErrors ?? 5;
+    this.pauseRetryMs = opts.pauseRetryMs ?? 5000;
     this.maxOpenPerSide = opts.maxOpenPerSide ?? MAX_OPEN_PER_SIDE;
     this.isFrozen = opts.isFrozen ?? (() => false);
     this.accountName = opts.accountName ?? null;
@@ -441,7 +456,10 @@ export class GridBot {
     try {
       const res = await this.adapter.cancel(this.symbol, excess.map(o => o.exchangeOrderId!));
       canceled = new Set(res.canceled);
-      for (const f of res.failed) this.warn(`Could not cancel extra order ${f.exchangeOrderId}: ${f.error}`);
+      for (const f of res.failed) {
+        if (isVenuePause(f.error)) this.notePause(f.error); // retried on the next tick
+        else this.warn(`Could not cancel extra order ${f.exchangeOrderId}: ${f.error}`);
+      }
     } catch (err) {
       this.warn(`Could not cancel extra orders: ${message(err)}`);
       return;
@@ -529,7 +547,8 @@ export class GridBot {
     });
     this.orders.set(rec.id, rec);
     try {
-      const { exchangeOrderId } = await this.adapter.placeLimit({ symbol: this.symbol, side: o.side, price: o.price, qty: o.qty, clientId });
+      const { exchangeOrderId } = await this.whilePaused(() =>
+        this.adapter.placeLimit({ symbol: this.symbol, side: o.side, price: o.price, qty: o.qty, clientId }));
       rec.status = "open";
       rec.exchangeOrderId = exchangeOrderId;
       await this.store.updateOrder(rec.id, { status: "open", exchangeOrderId });
@@ -608,6 +627,7 @@ export class GridBot {
     const live = open.filter(o => o.exchangeOrderId);
     let failed: { exchangeOrderId: string; error: string }[] = [];
     let ids = live.map(o => o.exchangeOrderId!);
+    const pauseEnds = Date.now() + PAUSE_MAX_MS;
     for (let attempt = 1; attempt <= 3 && ids.length; attempt++) {
       try {
         const res = await this.adapter.cancel(this.symbol, ids);
@@ -616,6 +636,13 @@ export class GridBot {
         failed = ids.map(id => ({ exchangeOrderId: id, error: message(err) }));
       }
       ids = failed.map(f => f.exchangeOrderId);
+      // Exchange paused (e.g. Deribit's daily settlement): wait it out without using up a try.
+      if (ids.length && failed.every(f => isVenuePause(f.error)) && Date.now() < pauseEnds) {
+        this.notePause(failed[0].error);
+        await sleep(this.pauseRetryMs);
+        attempt--;
+        continue;
+      }
       if (ids.length) await sleep(500 * attempt);
     }
     for (const f of failed) this.event("error", `Cancel failed for exchange order ${f.exchangeOrderId}: ${f.error}. Retrying in the background.`);
@@ -632,6 +659,31 @@ export class GridBot {
       await this.store.updateOrder(order.id, { status: "canceled" });
     }
     return stillOpen;
+  }
+
+  // ── Exchange pauses (e.g. Deribit's daily 08:00 UTC settlement) ──────
+
+  /**
+   * Runs an exchange request; while the exchange reports a short pause (settlement), waits and
+   * retries instead of failing, for up to PAUSE_MAX_MS. Such errors never count toward the
+   * "5 failed placements in a row" stop.
+   */
+  private async whilePaused<T>(fn: () => Promise<T>): Promise<T> {
+    const ends = Date.now() + PAUSE_MAX_MS;
+    for (;;) {
+      try { return await fn(); } catch (err) {
+        if (!isVenuePause(message(err)) || Date.now() >= ends || this.isFrozen()) throw err;
+        this.notePause(message(err));
+        await sleep(this.pauseRetryMs);
+      }
+    }
+  }
+
+  private lastPauseNote = 0;
+  private notePause(error: string) {
+    if (Date.now() - this.lastPauseNote < PAUSE_MAX_MS) return; // one note per pause
+    this.lastPauseNote = Date.now();
+    this.event("warn", `Exchange is paused (${error.replace(/^Deribit: /u, "")}): waiting for it to finish, then continuing`);
   }
 
   // ── Baskets (basket-grid) ────────────────────────────────────────────
@@ -819,7 +871,8 @@ export class GridBot {
       parentOrderId: null, refPrice: null, error: null, createdAt: Date.now(), filledAt: null,
     });
     try {
-      const { exchangeOrderId } = await this.adapter.placeMarket({ symbol: this.symbol, side, qty, clientId, refPrice: price });
+      const { exchangeOrderId } = await this.whilePaused(() =>
+        this.adapter.placeMarket({ symbol: this.symbol, side, qty, clientId, refPrice: price }));
       rec.exchangeOrderId = exchangeOrderId;
     } catch (err) {
       // The request may have reached the exchange even though the reply failed: look for it.

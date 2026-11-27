@@ -372,3 +372,84 @@ test("nothing fills within the 0.2% cap: up to one basket qty is carried; more t
   assert.equal(bot.rec.status, "error");
   assert.match(bot.rec.statusReason ?? "", /BUY 4 could not be executed within the 0.2% price cap, more than one basket.s qty \(2\)/u);
 });
+
+// ── Exchange pauses (Deribit's daily settlement) are waited out, never counted as failures ──
+
+/** Paper venue that answers "settlement_in_progress" to the next N placements / cancels. */
+class SettlingVenue extends PaperAdapter {
+  placeRefusals = 0;
+  cancelRefusals = 0;
+  constructor(px: () => Decimal) { super(async () => px()); }
+  override async placeLimit(req: Parameters<PaperAdapter["placeLimit"]>[0]) {
+    if (this.placeRefusals > 0) { this.placeRefusals--; throw new Error("Deribit: settlement_in_progress"); }
+    return super.placeLimit(req);
+  }
+  override async placeMarket(req: Parameters<PaperAdapter["placeMarket"]>[0]) {
+    if (this.placeRefusals > 0) { this.placeRefusals--; throw new Error("Deribit: settlement_in_progress"); }
+    return super.placeMarket(req);
+  }
+  override async cancel(symbol: string, ids: string[]) {
+    if (this.cancelRefusals > 0) {
+      this.cancelRefusals--;
+      return { canceled: [], failed: ids.map(id => ({ exchangeOrderId: id, error: "Deribit: settlement_in_progress" })) };
+    }
+    return super.cancel(symbol, ids);
+  }
+}
+
+async function settling(overrides: Partial<BotConfig> = {}) {
+  const store = new MemoryStore();
+  let price = new Decimal(100);
+  const venue = new SettlingVenue(() => price);
+  const rec = await store.createBot({ ...base, ...overrides }, "idle");
+  const bot = new GridBot(rec, store, venue, { tickMs: 60_000, pauseRetryMs: 1 });
+  await bot.load();
+  const at = async (p: number) => { price = new Decimal(p); await bot.tick(); };
+  return { store, bot, venue, at, open: () => store.orders.filter(o => o.status === "open") };
+}
+
+test("settlement while placing orders: the bot waits and carries on, no 5-failures stop", async () => {
+  const { bot, venue, at, open, store } = await settling();
+  venue.placeRefusals = 12; // more than the 5-failures limit
+  await at(100);
+  assert.equal(bot.rec.status, "running");
+  assert.equal(open().filter(o => o.role === "entry").length, 6);
+  assert.equal(store.orders.filter(o => o.status === "rejected").length, 0);
+  assert.equal(store.events.filter(e => /Exchange is paused/u.test(e.message)).length, 1, "one note, not one per retry");
+});
+
+test("settlement while cancelling on a stop: cancels are retried until they go through", async () => {
+  const { bot, venue, at, open } = await settling();
+  await at(100);
+  venue.cancelRefusals = 6; // more than the 3 normal cancel tries
+  await bot.kill("test stop");
+  assert.equal(bot.rec.status, "killed");
+  assert.equal(open().length, 0);
+  assert.doesNotMatch(bot.rec.statusReason ?? "", /could not be canceled/u);
+});
+
+test("settlement during a square-off: cancels and the closing order wait, then the basket closes normally", async () => {
+  const { bot, venue, at, open, store } = await settling();
+  await at(100);
+  await at(101);
+  venue.cancelRefusals = 4;
+  venue.placeRefusals = 4; // the square-off order, then the next basket's entries
+  await at(102);
+  assert.equal(bot.rec.status, "running");
+  const b1 = store.baskets.find(b => b.index === 1)!;
+  assert.equal(b1.status, "closed");
+  assert.equal(b1.squareoffQty, "2");
+  assert.equal(open().filter(o => o.role === "entry").length, 6);
+});
+
+test("a real placement error still stops the bot after 5 in a row", async () => {
+  const store = new MemoryStore();
+  const venue = new PaperAdapter(async () => new Decimal(100));
+  Object.assign(venue, { placeLimit: async () => { throw new Error("Deribit: not_enough_funds"); } });
+  const rec = await store.createBot({ ...base }, "idle");
+  const bot = new GridBot(rec, store, venue, { tickMs: 60_000, pauseRetryMs: 1 });
+  await bot.load();
+  for (let i = 0; i < 5; i++) await bot.tick(); // one rejected placement per tick
+  assert.equal(bot.rec.status, "error");
+  assert.match(bot.rec.statusReason ?? "", /5 order placements failed in a row/u);
+});
