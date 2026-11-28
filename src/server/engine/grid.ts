@@ -47,6 +47,8 @@ export interface GridBotOptions {
   accountName?: string | null;
   /** Returns true while the master kill switch is engaged. */
   isFrozen?: () => boolean;
+  /** Called once when the bot stops for good (any reason: limits, distance, error, kill switch). */
+  onStopped?: (bot: GridBot) => void;
 }
 
 interface Level { k: number; side: Side; price: Dec }
@@ -97,6 +99,7 @@ export class GridBot {
   private readonly pauseRetryMs: number;
   private readonly maxOpenPerSide: number;
   private readonly isFrozen: () => boolean;
+  private readonly onStopped: ((bot: GridBot) => void) | null;
   readonly accountName: string | null;
 
   constructor(rec: BotRecord, private readonly store: Store, private readonly adapter: ExchangeAdapter, opts: GridBotOptions = {}) {
@@ -106,6 +109,7 @@ export class GridBot {
     this.pauseRetryMs = opts.pauseRetryMs ?? 5000;
     this.maxOpenPerSide = opts.maxOpenPerSide ?? MAX_OPEN_PER_SIDE;
     this.isFrozen = opts.isFrozen ?? (() => false);
+    this.onStopped = opts.onStopped ?? null;
     this.accountName = opts.accountName ?? null;
   }
 
@@ -617,6 +621,7 @@ export class GridBot {
       status, statusReason: this.rec.statusReason, stoppedAt: this.rec.stoppedAt, lastPrice: this.rec.lastPrice,
     });
     this.event(stillOpen.size || status === "error" ? "error" : "warn", this.rec.statusReason);
+    try { this.onStopped?.(this); } catch (err) { this.warn(`Stop notification failed: ${message(err)}`); }
   }
 
   /**

@@ -133,6 +133,54 @@ export class TelegramNotifier {
 
 const esc = (s: string) => s.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 
+const STOP_LABEL: Record<string, string> = {
+  halted_total_distance: "Total distance reached",
+  halted_limit_breach: "Price limit breached",
+  halted_volume_cap: "All steps in use (volume cap)",
+  killed: "Stopped manually (kill switch)",
+  error: "Error",
+};
+
+const signed = (v: string | number, digits = 6) => {
+  const n = Number(v);
+  const s = Math.abs(n) < 1e-12 ? "0" : String(Number(n.toFixed(digits)));
+  return n > 0 ? `+${s}` : s;
+};
+
+/** Telegram message for a bot that stopped (any reason), with its PnL and anything left open. */
+export function botStoppedMessage(b: {
+  name: string; symbol: string; exchangeLabel: string; mode: "paper" | "live"; gridModel: string;
+  status: string; reason: string | null;
+  rtpPnl: string; roundtrips: number;
+  /** basket-grid only. */
+  squareoffPnl: string | null; basketsClosed: number | null;
+  /** The bot's own net position from its fills (positive = long), in the bot's qty units. */
+  netPosition: string;
+  /** Orders the exchange did not confirm as canceled. */
+  ordersStillOpen: number;
+  time: number;
+}): string {
+  const when = new Date(b.time).toISOString().replace("T", " ").slice(0, 19);
+  const pos = Number(b.netPosition);
+  const lines = [
+    `⛔ <b>Bot stopped · ${esc(b.name)}</b>`,
+    `${esc(b.symbol)} · ${esc(b.exchangeLabel)} · ${b.mode === "live" ? "LIVE" : "PAPER"} · ${esc(b.gridModel)}`,
+    "",
+    `<b>Reason:</b> ${esc(STOP_LABEL[b.status] ?? b.status)}`,
+    b.reason ? esc(b.reason) : "",
+    "",
+    `<b>RTP PnL:</b> ${signed(b.rtpPnl)} (${b.roundtrips} roundtrip${b.roundtrips === 1 ? "" : "s"})`,
+    b.squareoffPnl !== null ? `<b>Square-off PnL:</b> ${signed(b.squareoffPnl)} (${b.basketsClosed ?? 0} basket${b.basketsClosed === 1 ? "" : "s"} closed)` : "",
+    Math.abs(pos) > 1e-12
+      ? `\n⚠️ <b>Open position:</b> ${pos > 0 ? "LONG" : "SHORT"} ${esc(String(Math.abs(pos)))} ${esc(b.symbol)} is still open${b.mode === "live" ? " on the exchange — close it there if you don't want to keep it" : " (paper)"}.`
+      : "Open position: none",
+    b.ordersStillOpen > 0 ? `⚠️ <b>${b.ordersStillOpen} order(s)</b> could not be canceled yet — the bot keeps retrying; check the exchange.` : "",
+    "",
+    `${when} UTC · Gridbot`,
+  ];
+  return lines.filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\n").replace(/\n{3,}/gu, "\n\n").trim();
+}
+
 export function alertMessage(a: { symbol: string; exchangeLabel: string; side: "upper" | "lower"; price: string; upper: string | null; lower: string | null; time: number }): string {
   const hit = a.side === "upper" ? `rose to <b>${esc(a.price)}</b> — upper limit <b>${esc(a.upper ?? "")}</b> reached` : `fell to <b>${esc(a.price)}</b> — lower limit <b>${esc(a.lower ?? "")}</b> reached`;
   const other = a.side === "upper" ? (a.lower ? `Lower limit: ${esc(a.lower)}` : "") : (a.upper ? `Upper limit: ${esc(a.upper)}` : "");

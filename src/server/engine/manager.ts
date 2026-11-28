@@ -12,7 +12,7 @@ import type { AccountClient, ExchangeAdapter } from "../exchanges/types";
 import type { AccountRecord, BotRecord, Store } from "../store/types";
 import { GridBot, MAX_OPEN_PER_SIDE, basketView, message } from "./grid";
 import { AlertMonitor } from "../alerts";
-import { TelegramNotifier, alertMessage } from "../telegram";
+import { TelegramNotifier, alertMessage, botStoppedMessage } from "../telegram";
 
 export class UserError extends Error {}
 
@@ -70,7 +70,9 @@ export class BotManager {
         if (rec.status === "idle" || rec.status === "running") bot.start();
       } catch (err) {
         console.error(`Could not resume bot ${rec.id} (${rec.config.name}): ${message(err)}`);
-        await this.store.updateBot(rec.id, { status: "error", statusReason: `Could not resume after restart: ${message(err)}`, stoppedAt: Date.now() });
+        const stopped = { status: "error" as const, statusReason: `Could not resume after restart: ${message(err)}`, stoppedAt: Date.now() };
+        await this.store.updateBot(rec.id, stopped);
+        if (rec.status === "idle" || rec.status === "running") void this.notifyStopped({ ...rec, ...stopped });
       }
     }
     // Stopped bots whose orders were not all confirmed canceled keep retrying in the background.
@@ -191,10 +193,38 @@ export class BotManager {
     throw new UserError(`Live trading is not available for ${exchangeInfo(config.exchange).label} yet — use Paper mode`);
   }
 
-  private newBot(rec: BotRecord, account: AccountRecord | null): GridBot {
-    return new GridBot(rec, this.store, this.adapterFor(rec.config, account), {
+  private newBot(rec: BotRecord, account: AccountRecord | null, adapter?: ExchangeAdapter): GridBot {
+    return new GridBot(rec, this.store, adapter ?? this.adapterFor(rec.config, account), {
       tickMs: this.opts.tickMs, accountName: account?.name ?? null, isFrozen: () => this.frozen,
+      onStopped: bot => void this.notifyStopped(bot.rec),
     });
+  }
+
+  /**
+   * Telegram message when a bot stops for any reason, through the bot and chat saved for Price
+   * Alerts. Never throws: a failed notification is only logged.
+   */
+  private async notifyStopped(rec: BotRecord): Promise<void> {
+    const c = rec.config;
+    try {
+      if (!this.telegram.status().configured) return;
+      const bot = this.bots.get(rec.id);
+      const view = bot?.view();
+      const sides = await this.store.fillAggregates(rec.id);
+      const qty = (s: "buy" | "sell") => new Decimal(sides.find(a => a.side === s)?.qty ?? 0);
+      const isBasket = gridModelOf(c) === "basket-grid";
+      await this.telegram.send(botStoppedMessage({
+        name: c.name, symbol: c.symbol, exchangeLabel: exchangeInfo(c.exchange).label, mode: c.mode, gridModel: gridModelOf(c),
+        status: rec.status, reason: rec.statusReason, rtpPnl: rec.realizedPnl, roundtrips: rec.roundtrips,
+        squareoffPnl: isBasket ? rec.squareoffPnl : null, basketsClosed: isBasket ? view?.basket?.closed ?? 0 : null,
+        netPosition: qty("buy").minus(qty("sell")).toFixed(),
+        ordersStillOpen: view ? view.openEntries.length + view.openTargets.length : 0,
+        time: rec.stoppedAt ?? Date.now(),
+      }));
+      console.log(`Bot ${rec.id} (${c.name}) stopped: Telegram notification sent`);
+    } catch (err) {
+      console.error(`Bot ${rec.id} (${c.name}) stopped: Telegram notification failed: ${message(err)}`);
+    }
   }
 
   async createBot(input: BotConfig): Promise<number> {
@@ -261,9 +291,7 @@ export class BotManager {
     }
 
     const rec = await this.store.createBot(config, "idle");
-    const bot = new GridBot(rec, this.store, adapter, {
-      tickMs: this.opts.tickMs, accountName: account?.name ?? null, isFrozen: () => this.frozen,
-    });
+    const bot = this.newBot(rec, account, adapter);
     await bot.load();
     this.bots.set(rec.id, bot);
     bot.start();
